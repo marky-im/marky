@@ -14,7 +14,7 @@ Or do it by hand:
 /reload-plugins
 ```
 
-(Requires [bun](https://bun.sh). If the `drafty` command isn't found right after `/reload-plugins`, restart the session once to pick it up on PATH.)
+`/reload-plugins` activates everything live in the current session — the `drafty` skill and the `drafty` command on PATH, no restart. (Requires [bun](https://bun.sh).)
 
 ## How it works
 
