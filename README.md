@@ -4,16 +4,17 @@
 
 **Drafty** is point-and-comment review for the things Claude makes. Claude writes a plan, a spec, a page — you publish it to a link, then click any line and leave a note, Figma-style. Claude reads the comments and ships a new version on the same link, with history. No screenshots, no re-pasting "the third paragraph, the one about pricing."
 
-**Easiest:** in a Claude Code session, just ask — *"install the drafty-im/drafty plugin and reload."* Claude runs it for you (you approve the install once, or it's automatic on auto-approve), then reload to switch it on.
+**Easiest:** in a Claude Code session, just ask — *"install the drafty-im/drafty plugin."* Claude runs it for you (you approve the install once, or it's automatic on auto-approve), then run `/reload-plugins` to switch it on live — no restart.
 
 Or do it by hand:
 
 ```
 /plugin marketplace add drafty-im/drafty
 /plugin install drafty@drafty-im
+/reload-plugins
 ```
 
-Either way, after a reload the `drafty` command is on PATH in your Claude Code sessions. (Requires [bun](https://bun.sh).)
+(Requires [bun](https://bun.sh). If the `drafty` command isn't found right after `/reload-plugins`, restart the session once to pick it up on PATH.)
 
 ## How it works
 
