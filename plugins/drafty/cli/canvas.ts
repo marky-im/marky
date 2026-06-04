@@ -397,20 +397,68 @@ async function claim(args: string[]) {
     );
   }
   const me = await api("whoami", { method: "GET" }); // my identity = the new owner
+  // Claiming is the conversion moment — pin the canvas to a real account, not a
+  // throwaway guest. If the stored identity is still a guest, sign in first.
+  if (me.isGuest) {
+    console.error("Claiming keeps this canvas under your Drafty account — sign in first:");
+    console.error(`  drafty login <your-email>          Drafty emails you a 6-digit code`);
+    console.error(`  drafty login <your-email> <code>   finish sign-in`);
+    console.error(`then re-run:  DRAFTY_TOKEN=… drafty claim ${slug}`);
+    process.exit(1);
+  }
   await api("claim", { token: provisionToken, body: { slug, newCreatorId: me.userId } });
-  console.error(`✓ claimed — ${url(slug)} is yours now. It won't expire, and it's in \`drafty docs\`.`);
+  const who = me.email ? ` (${me.email})` : "";
+  console.error(`✓ claimed — ${url(slug)} is yours now${who}. It won't expire, and it's in \`drafty docs\`.`);
   // The demo→real conversion event — the activation funnel's bottom.
   await track("canvas.claimed", { slug });
+}
+
+// ── auth (email magic-code) ───────────────────────────────────────────────────
+// Upgrade this machine's guest identity into a real account. Two steps so an
+// agent can mediate: `drafty login <email>` mails a code; `drafty login <email>
+// <code>` verifies it. Instant upgrades the guest in place (same id for a new
+// email), so the canvases you already made stay yours — we just swap the stored
+// token for the upgraded one.
+async function login(args: string[]) {
+  const email = args.find((a) => !a.startsWith("--"));
+  const code = args.filter((a) => !a.startsWith("--"))[1];
+  if (!email || !email.includes("@")) {
+    return die('usage: drafty login <email>        (then) drafty login <email> <code>');
+  }
+  if (!code) {
+    await api("send-code", { body: { email } });
+    await track("auth.started", { method: "magic" });
+    console.error(`✓ code sent to ${email}`);
+    console.error(`  finish with:  drafty login ${email} <code>`);
+    return;
+  }
+  // verify runs as the current guest (its Bearer token) so Instant links the new
+  // identity onto it; the upgraded refresh token comes back to store.
+  const r = await api("verify", { body: { email, code } });
+  writeFileSync(TOKEN_FILE, r.token, { mode: 0o600 });
+  await track("auth.completed", { method: "magic", returning: r.upgradedInPlace === false });
+  console.error(`✓ signed in as ${r.email || email}`);
+  if (r.upgradedInPlace === false) {
+    console.error("  note: this email already had a Drafty account — canvases you made");
+    console.error("  as a guest on this machine stay under the guest id for now.");
+  }
+}
+
+// Drop the stored identity; the next command mints a fresh guest.
+function logout() {
+  if (existsSync(TOKEN_FILE)) rmSync(TOKEN_FILE, { force: true });
+  console.error("✓ signed out — a new guest identity will be created on next use");
 }
 
 // ── setup / health ────────────────────────────────────────────────────────────
 async function whoami() {
   const r = await api("whoami", { method: "GET" });
-  console.log(`identity : Claude (agent)`);
+  console.log(`identity : ${r.isGuest ? "guest (not signed in)" : r.email || "signed in"}`);
   console.log(`user id  : ${r.userId}`);
   console.log(`canvases : ${r.canvases}`);
   console.log(`server   : ${BASE_URL}`);
   console.log(`stored   : ${STATE_DIR}`);
+  if (r.isGuest) console.log(`\nSign in to keep canvases under your account:  drafty login <email>`);
 }
 
 async function doctor() {
@@ -525,6 +573,9 @@ const HELP = `drafty — share docs for annotation, read & reply to feedback
   drafty docs                                 list your canvases
   drafty claim <slug>                         keep a provisional canvas (DRAFTY_TOKEN=<provision token>)
 
+  drafty login <email> [code]                 sign in by email magic-code (upgrades your guest)
+  drafty logout                               drop the stored identity (back to a fresh guest)
+
   drafty rename <slug> "<new name>"           rename a canvas
   drafty rm-comment <commentId>               delete one comment
   drafty rm-thread <annotationId>             delete a thread (annotation + its comments)
@@ -535,8 +586,8 @@ const HELP = `drafty — share docs for annotation, read & reply to feedback
   drafty doctor                               preflight: bun, state dir, skill, server, identity
   drafty whoami                               show your canvas identity
 
-Identity is a guest token minted by the server, stored in ~/.drafty. No login.
-Point at another server with DRAFTY_BASE_URL.
+Identity starts as a guest token (stored in ~/.drafty); \`drafty login\` upgrades
+it into a real account in place. Point at another server with DRAFTY_BASE_URL.
 `;
 
 async function main() {
@@ -554,6 +605,8 @@ async function main() {
     case "restore": return restore(args);
     case "docs": case "ls": return docs();
     case "claim": return claim(args);
+    case "login": case "signin": return login(args);
+    case "logout": case "signout": return logout();
     case "rename": return rename(args);
     case "rm-comment": return rmComment(args);
     case "rm-thread": return rmThread(args);
