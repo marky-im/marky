@@ -401,8 +401,7 @@ async function claim(args: string[]) {
   // throwaway guest. If the stored identity is still a guest, sign in first.
   if (me.isGuest) {
     console.error("Claiming keeps this canvas under your Drafty account — sign in first:");
-    console.error(`  drafty login <your-email>          Drafty emails you a 6-digit code`);
-    console.error(`  drafty login <your-email> <code>   finish sign-in`);
+    console.error(`  drafty login          opens your browser to sign in`);
     console.error(`then re-run:  DRAFTY_TOKEN=… drafty claim ${slug}`);
     process.exit(1);
   }
@@ -414,34 +413,89 @@ async function claim(args: string[]) {
 }
 
 // ── auth (email magic-code) ───────────────────────────────────────────────────
-// Upgrade this machine's guest identity into a real account. Two steps so an
-// agent can mediate: `drafty login <email>` mails a code; `drafty login <email>
-// <code>` verifies it. Instant upgrades the guest in place (same id for a new
-// email), so the canvases you already made stay yours — we just swap the stored
-// token for the upgraded one.
-async function login(args: string[]) {
-  const email = args.find((a) => !a.startsWith("--"));
-  const code = args.filter((a) => !a.startsWith("--"))[1];
-  if (!email || !email.includes("@")) {
-    return die('usage: drafty login <email>        (then) drafty login <email> <code>');
+// Sign in by opening the browser. The /cli-auth page authenticates (magic-code,
+// later Google) and POSTs the resulting session token back to a one-shot
+// loopback listener we run here — so one action signs you in on BOTH the web and
+// this CLI. Local-only by design: the browser must reach 127.0.0.1 on this
+// machine. After sign-in we fold any canvases the prior guest made into the new
+// account.
+async function login() {
+  const oldToken = existsSync(TOKEN_FILE) ? readFileSync(TOKEN_FILE, "utf8").trim() : "";
+  let oldGuestId = "";
+  if (oldToken) {
+    try { const me = await api("whoami", { method: "GET", token: oldToken }); if (me.isGuest) oldGuestId = me.userId; } catch { /* ignore */ }
   }
-  if (!code) {
-    await api("send-code", { body: { email } });
-    await track("auth.started", { method: "magic" });
-    console.error(`✓ code sent to ${email}`);
-    console.error(`  finish with:  drafty login ${email} <code>`);
-    return;
-  }
-  // verify runs as the current guest (its Bearer token) so Instant links the new
-  // identity onto it; the upgraded refresh token comes back to store.
-  const r = await api("verify", { body: { email, code } });
-  writeFileSync(TOKEN_FILE, r.token, { mode: 0o600 });
-  await track("auth.completed", { method: "magic", returning: r.upgradedInPlace === false });
-  console.error(`✓ signed in as ${r.email || email}`);
-  if (r.upgradedInPlace === false) {
-    console.error("  note: this email already had a Drafty account — canvases you made");
-    console.error("  as a guest on this machine stay under the guest id for now.");
-  }
+
+  const state = crypto.randomUUID();
+  let resolveCb!: (token: string) => void;
+  let rejectCb!: (e: Error) => void;
+  const got = new Promise<string>((res, rej) => { resolveCb = res; rejectCb = rej; });
+
+  const allowOrigin = new URL(BASE_URL).origin;
+  const cors = { "access-control-allow-origin": allowOrigin, "access-control-allow-methods": "POST, OPTIONS", "access-control-allow-headers": "content-type", "access-control-allow-private-network": "true" };
+  const json = (b: unknown, status: number, origin: string | null) =>
+    new Response(JSON.stringify(b), { status, headers: { ...cors, "content-type": "application/json", ...(origin === allowOrigin ? { "access-control-allow-origin": origin } : {}) } });
+
+  const server = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    async fetch(req) {
+      const origin = req.headers.get("origin");
+      if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: { ...cors, ...(origin === allowOrigin ? { "access-control-allow-origin": origin } : {}) } });
+      const u = new URL(req.url);
+      if (u.pathname !== "/callback" || req.method !== "POST") return json({ ok: false }, 404, origin);
+      if (origin !== allowOrigin) return json({ ok: false }, 403, origin); // only our web origin may hand a token back
+      try {
+        const body = (await req.json()) as { token?: string; state?: string };
+        if (body.state !== state || !body.token) return json({ ok: false }, 400, origin);
+        resolveCb(body.token);
+        return json({ ok: true }, 200, origin);
+      } catch {
+        return json({ ok: false }, 400, origin);
+      }
+    },
+  });
+
+  const d = Buffer.from(JSON.stringify({ port: server.port, state })).toString("base64url");
+  const authUrl = `${BASE_URL}/cli-auth?d=${d}`;
+  await track("auth.started", { method: "browser" });
+  console.error("Opening your browser to sign in…");
+  console.error(`  ${authUrl}`);
+  openBrowser(authUrl);
+
+  const timer = setTimeout(() => rejectCb(new Error("timed out waiting for the browser — re-run `drafty login`")), 180000);
+  let token: string;
+  try { token = await got; } catch (e) { server.stop(true); return die((e as Error).message); }
+  clearTimeout(timer);
+  server.stop(true);
+
+  // Valid token in hand — store it first so login can't fail past this point.
+  writeFileSync(TOKEN_FILE, token, { mode: 0o600 });
+  await track("auth.completed", { method: "browser" });
+
+  // Best-effort: identify (for the confirmation line) and fold guest canvases in.
+  // Raw fetches, never `api()` — a hiccup here must not undo a successful sign-in.
+  let label = "";
+  try {
+    const meRes = await fetch(`${BASE_URL}/get/api/whoami`, { headers: { authorization: `Bearer ${token}` } });
+    const me = (await meRes.json().catch(() => ({}))) as { userId?: string; email?: string };
+    if (me.userId) {
+      label = me.email || me.userId;
+      if (oldGuestId && me.userId !== oldGuestId) {
+        const mr = await fetch(`${BASE_URL}/get/api/merge`, { method: "POST", headers: { authorization: `Bearer ${oldToken}`, "content-type": "application/json" }, body: JSON.stringify({ newCreatorId: me.userId }) });
+        const md = (await mr.json().catch(() => ({}))) as { merged?: number };
+        if (md.merged) console.error(`  brought ${md.merged} canvas(es) over from your guest session`);
+      }
+    }
+  } catch { /* ignore */ }
+  console.error(`✓ signed in${label ? ` as ${label}` : ""}`);
+}
+
+function openBrowser(url: string) {
+  const cmd = process.platform === "darwin" ? ["open", url]
+    : process.platform === "win32" ? ["cmd", "/c", "start", "", url]
+    : ["xdg-open", url];
+  try { Bun.spawn(cmd, { stdout: "ignore", stderr: "ignore" }); } catch { /* user can click the printed URL */ }
 }
 
 // Drop the stored identity; the next command mints a fresh guest.
@@ -458,7 +512,7 @@ async function whoami() {
   console.log(`canvases : ${r.canvases}`);
   console.log(`server   : ${BASE_URL}`);
   console.log(`stored   : ${STATE_DIR}`);
-  if (r.isGuest) console.log(`\nSign in to keep canvases under your account:  drafty login <email>`);
+  if (r.isGuest) console.log(`\nSign in to keep canvases under your account:  drafty login`);
 }
 
 async function doctor() {
@@ -573,7 +627,7 @@ const HELP = `drafty — share docs for annotation, read & reply to feedback
   drafty docs                                 list your canvases
   drafty claim <slug>                         keep a provisional canvas (DRAFTY_TOKEN=<provision token>)
 
-  drafty login <email> [code]                 sign in by email magic-code (upgrades your guest)
+  drafty login                                sign in (opens your browser; signs in web + CLI)
   drafty logout                               drop the stored identity (back to a fresh guest)
 
   drafty rename <slug> "<new name>"           rename a canvas
@@ -605,7 +659,7 @@ async function main() {
     case "restore": return restore(args);
     case "docs": case "ls": return docs();
     case "claim": return claim(args);
-    case "login": case "signin": return login(args);
+    case "login": case "signin": return login();
     case "logout": case "signout": return logout();
     case "rename": return rename(args);
     case "rm-comment": return rmComment(args);

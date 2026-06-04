@@ -29,7 +29,7 @@ You talk; Claude runs the commands. You never touch the CLI yourself.
 ## What's in the box
 
 - **The `drafty` skill** — teaches Claude the whole loop: publish, read comments, reply on the canvas, mark threads done, push revisions, roll back. Claude loads it on its own when you say "drafty it" / "share this for feedback" / "what did they comment".
-- **The `drafty` CLI** — a thin HTTP client (no keys — it starts as a persistent guest stored in `~/.drafty`, and `drafty login <email>` upgrades that into a real account in place when you want to keep canvases). `push`, `watch`, `inbox`, `reply`, `resolve`, `mode`, `claim`, and the rest.
+- **The `drafty` CLI** — a thin HTTP client (no keys — it starts as a persistent guest stored in `~/.drafty`, and `drafty login` opens your browser to sign in, one sign-in covering web + CLI, when you want to keep canvases). `push`, `watch`, `inbox`, `reply`, `resolve`, `mode`, `claim`, and the rest.
 
 ## Modes
 
@@ -45,7 +45,7 @@ A canvas has one **mode**, and Claude sets it from how you talk:
 
 ## Privacy & telemetry
 
-The CLI starts as an anonymous guest — no account, no email — until you choose to `drafty login <email>` to keep canvases under a real account. It sends basic usage events (e.g. `canvas.published`) to drafty.im so I can see what's used; set `DRAFTY_NO_ANALYTICS=1` to turn that off. It only ever talks to `drafty.im` (override with `DRAFTY_BASE_URL`).
+The CLI starts as an anonymous guest — no account, no email — until you choose to `drafty login` (which opens your browser) to keep canvases under a real account. It sends basic usage events (e.g. `canvas.published`) to drafty.im so I can see what's used; set `DRAFTY_NO_ANALYTICS=1` to turn that off. It only ever talks to `drafty.im` (override with `DRAFTY_BASE_URL`).
 
 ## Links
 

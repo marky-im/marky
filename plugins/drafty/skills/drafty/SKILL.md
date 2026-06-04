@@ -62,14 +62,14 @@ Just run `drafty <command>`; there's no separate setup step.
 (stored in `~/.drafty`) against the public app, just like a web visitor — so
 it's safe to distribute. The canvas owner is whoever published it. When the
 human wants to **keep** canvases under a real account (e.g. claiming a demo, or
-working across machines), sign them in by email magic-code — this upgrades the
-guest in place, so canvases already published stay theirs:
+working across machines), sign them in:
 
-- `drafty login <email>` → Drafty emails a 6-digit code.
-- `drafty login <email> <code>` → finishes sign-in.
+- `drafty login` → opens their browser to sign in. One sign-in covers both the
+  web and this CLI; canvases the guest already made are folded into the account.
 
-Ask the human for their email, then for the code Drafty mails them. `drafty
-logout` drops back to a fresh guest.
+Run `drafty login` and tell the human to finish in the browser tab — the command
+returns once they're signed in. (It needs a browser on the same machine as the
+CLI.) `drafty logout` drops back to a fresh guest.
 
 ## Commands
 
@@ -85,7 +85,7 @@ logout` drops back to a fresh guest.
 | `drafty resolve <annotationId>` / `reopen <annotationId>` | Toggle a thread's completed state. |
 | `drafty restore <slug> <revisionId>` | Roll the doc back to a past version (revision ids show in the web History panel). |
 | `drafty docs` | List your canvases. |
-| `drafty login <email> [code]` | Sign the human in by email magic-code (upgrades the guest in place). `drafty login <email>` mails a code; `drafty login <email> <code>` finishes. `drafty logout` reverts to a fresh guest. |
+| `drafty login` | Sign the human in — opens their browser; one sign-in covers web + CLI, and the guest's canvases fold into the account. `drafty logout` reverts to a fresh guest. |
 | `drafty claim <slug>` | Take ownership of a *provisional* canvas (one minted by `/get/provision`) so it stops being ephemeral and lists under the human's account. Requires being signed in (`drafty login` first); authorize the transfer with the canvas's provision token: `DRAFTY_TOKEN=<provision token> drafty claim <slug>`. Only when the human asks to keep it. |
 
 **Managing a canvas** (owner-only — you can delete anything on a canvas you published):
