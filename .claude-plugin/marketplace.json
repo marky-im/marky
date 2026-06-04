@@ -1,0 +1,15 @@
+{
+  "name": "drafty-im",
+  "owner": {
+    "name": "John Kueh",
+    "url": "https://drafty.im"
+  },
+  "description": "Drafty — point-and-comment on Claude artifacts; Claude edits them in place.",
+  "plugins": [
+    {
+      "name": "drafty",
+      "source": "./plugins/drafty",
+      "description": "Share a Markdown/HTML artifact to a live canvas anyone can annotate Figma-style. Read the comments and ship a revised version on the same link, with history. Requires bun."
+    }
+  ]
+}
