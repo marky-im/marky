@@ -83,7 +83,9 @@ CLI.) `drafty logout` drops back to a fresh guest.
 | `drafty working <annotationId>` | Shimmer the thread on the canvas while you work on it. Cleared by reply/resolve. |
 | `drafty reply <annotationId> "<msg>"` | Reply in a thread, authored as Claude (shows on the canvas). |
 | `drafty resolve <annotationId>` / `reopen <annotationId>` | Toggle a thread's completed state. |
-| `drafty restore <slug> <revisionId>` | Roll the doc back to a past version (revision ids show in the web History panel). |
+| `drafty pull <slug> [--revision <id>] [-o <file>]` | Download the artifact body. Content goes to stdout (newline-terminated, so it pipes/redirects cleanly); metadata to stderr. `--revision` pulls a past version; `-o`/`--out` writes a file; `--json` returns the full envelope. |
+| `drafty versions <slug> [--json]` | List a canvas's versions, newest first — each with its revision id, time, author, and note. Feed an id into `drafty pull --revision` or `drafty restore`. |
+| `drafty restore <slug> <revisionId>` | Roll the doc back to a past version (revision ids come from `drafty versions` or the web History panel). |
 | `drafty docs` | List your canvases. |
 | `drafty login` | Sign the human in — opens their browser; one sign-in covers web + CLI, and the guest's canvases fold into the account. `drafty logout` reverts to a fresh guest. |
 | `drafty claim <slug>` | Take ownership of a *provisional* canvas (one minted by `/get/provision`) so it stops being ephemeral and lists under the human's account. Requires being signed in (`drafty login` first); authorize the transfer with the canvas's provision token: `DRAFTY_TOKEN=<provision token> drafty claim <slug>`. Only when the human asks to keep it. |

@@ -234,6 +234,51 @@ async function restore(args: string[]) {
   console.log(`✓ restored ${slug} to revision ${revisionId}`);
 }
 
+// Download the artifact body. Content goes to stdout (newline-terminated) so it
+// pipes/redirects cleanly; metadata goes to stderr. --revision pulls a past
+// version (ids come from `drafty versions`); -o/--out writes a file instead.
+async function pullDoc(args: string[]) {
+  const slug = args[0];
+  if (!slug || slug.startsWith("--")) return die("usage: drafty pull <slug> [--revision <id>] [-o <file>] [--json]");
+  const revisionId = flag(args, "revision") || flag(args, "rev");
+  const outIdx = args.indexOf("-o");
+  const out = flag(args, "out") || (outIdx >= 0 ? args[outIdx + 1] : undefined);
+  const r = await api("pull", { method: "GET", query: { slug, ...(revisionId ? { revisionId } : {}) } });
+  if (has(args, "json")) {
+    console.log(JSON.stringify({ slug, title: r.title, format: r.format, revisionId: r.revisionId, createdAt: r.createdAt, content: r.content }, null, 2));
+  } else {
+    const ver = r.revisionId ? `revision ${r.revisionId}` : "current";
+    console.error(`# ${r.title} — ${url(slug)}`);
+    console.error(`  ${r.format} · ${ver}${r.createdAt ? ` · ${new Date(r.createdAt).toLocaleString()}` : ""}`);
+    if (out) {
+      writeFileSync(out, r.content);
+      console.error(`✓ wrote ${out}`);
+    } else {
+      process.stdout.write(r.content);
+      if (!r.content.endsWith("\n")) process.stdout.write("\n");
+    }
+  }
+  await track("canvas.pulled", { slug, revision: r.revisionId || "current", out: out ? "file" : "stdout" });
+}
+
+async function versions(args: string[]) {
+  const slug = args[0];
+  if (!slug || slug.startsWith("--")) return die("usage: drafty versions <slug> [--json]");
+  const r = await api("versions", { method: "GET", query: { slug } });
+  const revs = r.revisions as any[];
+  if (has(args, "json")) {
+    console.log(JSON.stringify({ slug, title: r.title, revisions: revs }, null, 2));
+    return;
+  }
+  console.log(`# ${r.title} — ${url(slug)}`);
+  console.log(`${revs.length} version(s) — newest first\n`);
+  for (const v of revs) {
+    console.log(v.id);
+    console.log(`  ${new Date(v.createdAt).toLocaleString()} · ${v.authorName} (${v.authorKind})${v.note ? ` · ${v.note}` : ""}`);
+    console.log(`  pull: drafty pull ${slug} --revision ${v.id}\n`);
+  }
+}
+
 async function setMode(args: string[]) {
   const slug = args[0];
   const mode = parseMode(args[1]);
@@ -621,6 +666,8 @@ const HELP = `drafty — share docs for annotation, read & reply to feedback
   drafty push <file> [--title T] [--slug S] [--mode M]   publish/update a doc
   drafty mode <slug> <readonly|feedback|live> set how the canvas behaves when shared
   drafty list <slug> [--json] [--open]        snapshot all threads + comments
+  drafty pull <slug> [--revision id] [-o f]   download the artifact (stdout, or -o file; --revision for a past version)
+  drafty versions <slug> [--json]             list a canvas's versions, newest first
   drafty inbox [slug] [--json] [--all]        fresh threads that need Claude (one-shot)
   drafty watch <slug> [--json] [--backlog]    stream new comments live (SSE doorbell)
   drafty reply <annotationId> "<message>"     reply in a thread as Claude
@@ -653,7 +700,9 @@ async function main() {
   switch (cmd) {
     case "push": return push(args);
     case "mode": return setMode(args);
-    case "list": case "pull": return list(args);
+    case "list": return list(args);
+    case "pull": case "cat": return pullDoc(args);
+    case "versions": case "history": return versions(args);
     case "inbox": case "pending": return inbox(args);
     case "watch": return watch(args);
     case "reply": case "comment": return reply(args);
