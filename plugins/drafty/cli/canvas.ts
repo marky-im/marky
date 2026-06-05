@@ -71,6 +71,63 @@ async function track(eventName: string, props: Record<string, unknown> = {}): Pr
 }
 const SKILL_DST = join(homedir(), ".claude", "skills", "drafty", "SKILL.md");
 
+// ── update check ─────────────────────────────────────────────────────────────
+// A quiet, npm-style nudge: compare the installed version against the latest
+// published one and, if behind, print a one-liner to stderr (never stdout, so it
+// can't corrupt --json output). Throttled to once a day, cached in ~/.drafty.
+// The apply step is left to the human on purpose — `claude plugin update` mutates
+// their environment, and the running session won't pick the new version up until
+// /reload-plugins anyway. Set DRAFTY_NO_UPDATE_CHECK=1 to silence it.
+const UPDATE_CHECK_FILE = join(STATE_DIR, "update-check.json");
+const UPDATE_MANIFEST_URL =
+  "https://raw.githubusercontent.com/drafty-im/drafty/main/plugins/drafty/.claude-plugin/plugin.json";
+const UPDATE_TTL_MS = 24 * 60 * 60 * 1000;
+
+function installedVersion(): string | null {
+  try {
+    const p = join(import.meta.dir, "..", ".claude-plugin", "plugin.json");
+    return (JSON.parse(readFileSync(p, "utf8")).version as string) || null;
+  } catch { return null; }
+}
+// -1 if a < b, 0 if equal, 1 if a > b. Plain x.y.z, no pre-release tags.
+function cmpSemver(a: string, b: string): number {
+  const pa = a.split(".").map(Number), pb = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) { const d = (pa[i] || 0) - (pb[i] || 0); if (d) return d < 0 ? -1 : 1; }
+  return 0;
+}
+async function fetchLatestVersion(): Promise<string | null> {
+  try {
+    const res = await fetch(UPDATE_MANIFEST_URL, { signal: AbortSignal.timeout(2500) });
+    if (!res.ok) return null;
+    const v = (await res.json())?.version;
+    return typeof v === "string" ? v : null;
+  } catch { return null; }
+}
+// Latest published version: returns the cached value when fresh, else refetches
+// (and re-stamps the cache so an offline run doesn't re-hit the network each call).
+async function latestVersion(): Promise<string | null> {
+  let cache: { latest?: string; checkedAt?: number } = {};
+  try { if (existsSync(UPDATE_CHECK_FILE)) cache = JSON.parse(readFileSync(UPDATE_CHECK_FILE, "utf8")); } catch { /* ignore */ }
+  if (cache.checkedAt && Date.now() - cache.checkedAt < UPDATE_TTL_MS) return cache.latest ?? null;
+  const fetched = await fetchLatestVersion();
+  const next = { latest: fetched ?? cache.latest, checkedAt: Date.now() };
+  try { mkdirSync(STATE_DIR, { recursive: true }); writeFileSync(UPDATE_CHECK_FILE, JSON.stringify(next)); } catch { /* ignore */ }
+  return next.latest ?? null;
+}
+async function maybeNudgeUpdate(): Promise<void> {
+  if (process.env.DRAFTY_NO_UPDATE_CHECK) return;
+  const cur = installedVersion();
+  if (!cur) return;
+  const latest = await latestVersion();
+  if (!latest || cmpSemver(cur, latest) >= 0) return;
+  const y = (s: string) => `\x1b[33m${s}\x1b[0m`;
+  process.stderr.write(
+    `\n${y(`▲ drafty ${latest} available`)} \x1b[2m(you're on ${cur})\x1b[0m\n` +
+    `  ${y("claude plugin update drafty@drafty-im")} then ${y("/reload-plugins")}\n` +
+    `  — or just ask me to "update drafty".\n`,
+  );
+}
+
 // ── pure helpers (no network) ────────────────────────────────────────────────
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 function shortHash(n = 5): string {
@@ -592,6 +649,8 @@ async function doctor() {
   let ok = true;
   const pass = (l: string, d = "") => console.log(`  \x1b[32m✓\x1b[0m ${l}${d ? `  \x1b[2m${d}\x1b[0m` : ""}`);
   const fail = (l: string, d = "") => { ok = false; console.log(`  \x1b[31m✗\x1b[0m ${l}${d ? `  \x1b[2m${d}\x1b[0m` : ""}`); };
+  // An available update isn't a broken state — surface it, don't fail on it.
+  const warn = (l: string, d = "") => console.log(`  \x1b[33m▲\x1b[0m ${l}${d ? `  \x1b[2m${d}\x1b[0m` : ""}`);
 
   console.log("drafty — doctor\n");
 
@@ -620,6 +679,14 @@ async function doctor() {
 
   const launcher = Bun.which("drafty");
   launcher ? pass("drafty on PATH", launcher) : fail("drafty not on PATH", "run `drafty setup`");
+
+  const cur = installedVersion();
+  const latest = await latestVersion();
+  if (cur && latest && cmpSemver(cur, latest) < 0) {
+    warn("update available", `${cur} → ${latest} · claude plugin update drafty@drafty-im then /reload-plugins`);
+  } else if (cur) {
+    pass("version", latest ? `v${cur} (latest)` : `v${cur}`);
+  }
 
   try {
     const res = await Promise.race([
@@ -753,5 +820,5 @@ async function main() {
 }
 
 main()
-  .then(() => process.exit(0))
+  .then(async () => { await maybeNudgeUpdate(); process.exit(0); })
   .catch((e) => die(e?.message ?? String(e)));

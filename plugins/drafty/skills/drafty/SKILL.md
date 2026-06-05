@@ -1,6 +1,6 @@
 ---
 name: drafty
-description: Share a Markdown/HTML doc (a plan, draft, design, page) to drafty.im/canvas/<slug> where the user and anyone they invite can drop Figma-style threaded comments anchored to specific elements. Read that feedback, reply on the canvas or in chat, mark items done, and push an updated version. Use when the user says "drafty it", "drafty this", "drafty that", "drafty <file>", "share this for feedback", "put this on a canvas", "send this to the canvas", "what did they comment", "read the canvas comments", "address the feedback", "update the canvas", or pastes a drafty.im/canvas/ URL. Also covers auth — "drafty login", "drafty auth", "drafty signup", "sign in to drafty", "sign up", "authenticate", or "claim my canvases" all map to the drafty login command.
+description: Share a Markdown/HTML doc (a plan, draft, design, page) to drafty.im/canvas/<slug> where the user and anyone they invite can drop Figma-style threaded comments anchored to specific elements. Read that feedback, reply on the canvas or in chat, mark items done, and push an updated version. Use when the user says "drafty it", "drafty this", "drafty that", "drafty <file>", "share this for feedback", "put this on a canvas", "send this to the canvas", "what did they comment", "read the canvas comments", "address the feedback", "update the canvas", or pastes a drafty.im/canvas/ URL. Also covers auth — "drafty login", "drafty auth", "drafty signup", "sign in to drafty", "sign up", "authenticate", or "claim my canvases" all map to the drafty login command. And "update drafty", "upgrade drafty", or "is drafty up to date" map to updating the plugin (claude plugin update drafty@drafty-im, then ask the user to run /reload-plugins).
 ---
 
 # Drafty — comment on Claude artifacts, Claude edits them
@@ -58,18 +58,18 @@ Just run `drafty <command>`; there's no separate setup step.
 - `drafty doctor` — sanity-check the environment (bun, state dir, Instant reachable).
 - `drafty whoami` — show your identity.
 
-**Starts with no login.** The CLI authenticates as a persistent guest user
-(stored in `~/.drafty`) against the public app, just like a web visitor — so
-it's safe to distribute. The canvas owner is whoever published it. When the
-human wants to **keep** canvases under a real account (e.g. claiming a demo, or
-working across machines), sign them in:
+**Sign in first.** Plugin commands run on the human's real account — there's no
+anonymous guest mode here (that's the no-install `drafty.im/get` demo). A command
+run with no stored login just says "Not signed in — run `drafty login`" and does
+nothing else; it never silently mints a guest. So sign the human in before
+publishing their work:
 
 - `drafty login` → opens their browser to sign in. One sign-in covers both the
-  web and this CLI; canvases the guest already made are folded into the account.
+  web and this CLI; any canvases made before signing in fold into the account.
 
 Run `drafty login` and tell the human to finish in the browser tab — the command
 returns once they're signed in. (It needs a browser on the same machine as the
-CLI.) `drafty logout` drops back to a fresh guest.
+CLI.) `drafty logout` signs out.
 
 **`drafty login` is the only auth entry point.** When the human says "auth",
 "authenticate", "sign in", "sign up", "signup", "log in", "create an account", or
@@ -77,6 +77,17 @@ CLI.) `drafty logout` drops back to a fresh guest.
 `drafty signup` subcommand; `login` does both (a new email creates the account in
 place and folds the guest's canvases in). Don't treat these as ambiguous — go
 straight to `drafty login`.
+
+**Keeping drafty current.** The CLI prints a one-line `▲ drafty <version> available`
+nudge (to stderr) when a newer version is published, and `drafty doctor` shows the
+same. If you see it — or the human says "update drafty" / "upgrade drafty" / "is
+drafty up to date" — apply it for them:
+
+    claude plugin update drafty@drafty-im
+
+Then ask them to run `/reload-plugins`: it's a human keystroke you can't issue, and
+this session keeps using the old version until they do. One quick yes — don't run
+the update unprompted, since it changes their environment.
 
 ## Commands
 
@@ -94,7 +105,7 @@ straight to `drafty login`.
 | `drafty versions <slug> [--json]` | List a canvas's versions, newest first — each with its revision id, time, author, and note. Feed an id into `drafty pull --revision` or `drafty restore`. |
 | `drafty restore <slug> <revisionId>` | Roll the doc back to a past version (revision ids come from `drafty versions` or the web History panel). |
 | `drafty docs` | List your canvases. |
-| `drafty login` | Sign the human in — opens their browser; one sign-in covers web + CLI, and the guest's canvases fold into the account. `drafty logout` reverts to a fresh guest. |
+| `drafty login` | Sign the human in — opens their browser; one sign-in covers web + CLI, and any canvases made before signing in fold into the account. `drafty logout` signs out. |
 | `drafty claim <slug>` | Take ownership of a *provisional* canvas (one minted by `/get/provision`) so it stops being ephemeral and lists under the human's account. Requires being signed in (`drafty login` first); authorize the transfer with the canvas's provision token: `DRAFTY_TOKEN=<provision token> drafty claim <slug>`. Only when the human asks to keep it. |
 
 **Managing a canvas** (owner-only — you can delete anything on a canvas you published):
