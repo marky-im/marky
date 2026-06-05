@@ -182,6 +182,17 @@ function modeLine(mode: Mode, slug: string): string {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+// A point anchor (opaque visual: image/screenshot) carries a fractional (fx,fy)
+// inside the element. Turn it into a human region + percentages so you know
+// *where* on the image the comment sits (e.g. `@ top-right (78%,22%)`).
+function pointHint(a: any): string {
+  if (typeof a.anchorFx !== "number" || typeof a.anchorFy !== "number") return "";
+  const col = a.anchorFx < 0.34 ? "left" : a.anchorFx > 0.66 ? "right" : "center";
+  const row = a.anchorFy < 0.34 ? "top" : a.anchorFy > 0.66 ? "bottom" : "middle";
+  const region = row === "middle" && col === "center" ? "center" : `${row}-${col}`;
+  return ` @ ${region} (${Math.round(a.anchorFx * 100)}%,${Math.round(a.anchorFy * 100)}%)`;
+}
+
 function anchorLabel(a: any): string {
   const grp = Array.isArray(a.anchors) ? a.anchors : null;
   if (grp && grp.length > 1) {
@@ -189,7 +200,7 @@ function anchorLabel(a: any): string {
     const more = grp.length > 3 ? ` + ${grp.length - 3} more` : "";
     return `${grp.length} elements — ${parts}${more}`;
   }
-  return `<${a.anchorTag}> "${a.anchorText}"`;
+  return `<${a.anchorTag}> "${a.anchorText}"${pointHint(a)}`;
 }
 
 function die(msg: string): never {
@@ -397,7 +408,7 @@ async function watch(args: string[]) {
 
   const emit = (ev: any) => {
     if (asJson) {
-      console.log(JSON.stringify({ annotationId: ev.annotationId, anchorTag: ev.anchorTag, anchorText: ev.anchorText, anchors: ev.anchors ?? null, status: ev.status, author: ev.author, body: ev.body, createdAt: ev.createdAt }));
+      console.log(JSON.stringify({ annotationId: ev.annotationId, anchorTag: ev.anchorTag, anchorText: ev.anchorText, anchors: ev.anchors ?? null, anchorFx: ev.anchorFx ?? null, anchorFy: ev.anchorFy ?? null, status: ev.status, author: ev.author, body: ev.body, createdAt: ev.createdAt }));
     } else {
       console.log(`[${shortTime(ev.createdAt)}] ${ev.author} on ${anchorLabel(ev)}`);
       console.log(`  ${ev.body}`);

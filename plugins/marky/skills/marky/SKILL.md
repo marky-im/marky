@@ -174,6 +174,36 @@ watch doorbell for that canvas (`Monitor` on `marky watch <slug> --json`).
   re-push, and `resolve` each as you finish. The anchor's `anchorText` tells you
   exactly which element the comment targets.
 
+**Comments on a spot of an image / screenshot (point anchors)**
+When someone comments on a precise point of an opaque visual (an image, a pasted
+screenshot, `canvas`/`svg`/`video`), the thread carries `anchorFx`/`anchorFy` — a
+fraction `(0..1)` inside the element — on top of `anchorTag: "img"` and
+`anchorText` (the image's alt). `list`/`inbox`/`watch` include these; the human
+label shows a region, e.g. `<img> "dashboard" @ top-right (78%,22%)`.
+
+To know *where* a comment points — and to actually **see** it:
+1. `marky pull <slug>` to get the content; find the `<img>` and its `src`.
+2. Read the image — Read needs a local file path, so first get the `src` onto
+   disk: a `data:` URI → decode its base64 to a temp file (`.png`/`.jpg`/`.svg`
+   by mime); a URL → fetch it down. Then Read it (Claude Code views images). The
+   comment points at `(fx·width, fy·height)`; the region label already tells you
+   the quadrant.
+3. For pixel-precise sight, drop a marker on a copy and Read that: a tiny HTML
+   `<div style="position:relative;display:inline-block"><img src="…"><div
+   style="position:absolute;left:calc(FX*100% - 13px);top:calc(FY*100% - 13px);
+   width:26px;height:26px;border-radius:50%;background:#e0119d;border:3px solid
+   #fff"></div></div>`, screenshot it (any headless browser), Read the PNG.
+
+Always Read the **full** image (with the marker) — the surrounding context is
+usually what tells you *why* the comment is right (the value it should match, the
+label it refers to). Don't crop down to the point: a crop discards context you
+can't recover and biases you toward a region that may not hold the cause. Only if
+the point renders too small to read on a very large image, *additionally* crop
+±10–15% around `(fx,fy)` and Read that too — never instead of the full frame.
+
+So "the number in the top-right looks wrong" on a screenshot is actionable: you
+see the image, you know the spot is `top-right (78%,22%)`, you fix that number.
+
 **Autonomous mode — wake on events, handle in an active session**
 The handler is an **active Claude Code session** — no `claude -p`, no API calls.
 The trick is to keep *detection* out of the model: a comment arriving is a free,
