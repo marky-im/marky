@@ -30,10 +30,6 @@ function writeIdentity(id: Identity): void {
 function clearIdentity(): void {
   try { if (existsSync(IDENTITY_FILE)) rmSync(IDENTITY_FILE, { force: true }); } catch { /* non-fatal */ }
 }
-function warnSessionLost(email?: string): void {
-  console.error(`\x1b[33m⚠ Your Drafty session was lost — you're acting as a guest.\x1b[0m`);
-  console.error(`  Run \`drafty login\` to sign back in${email ? ` as ${email}` : ""}.`);
-}
 const ANALYTICS_ID_FILE = join(STATE_DIR, "analytics-id");
 
 // Thin analytics: a stable per-install id (the agent is its own "user") and a
@@ -153,20 +149,12 @@ async function getToken(): Promise<string> {
     const t = readFileSync(TOKEN_FILE, "utf8").trim();
     if (t) return t;
   }
-  // Token gone. If a marker says we were signed in, this is a lost session, not a
-  // first run — surface it loudly and remember (so later commands keep nagging
-  // until the human re-logs in) rather than silently becoming a fresh guest.
+  // Plugin commands run on the human's REAL account — there is no anonymous guest
+  // mode here (the no-install demo at <base>/get is the guest path). With no stored
+  // token the human just needs to sign in; never silently mint a guest.
   const id = readIdentity();
-  if (id?.signedIn) {
-    if (!id.sessionLost) writeIdentity({ ...id, sessionLost: true });
-    warnSessionLost(id.email);
-  }
-  const res = await fetch(`${BASE_URL}/get/api/auth`, { method: "POST" });
-  const data: any = await res.json().catch(() => ({}));
-  if (!res.ok || !data.token) die(`couldn't establish a Drafty identity (${res.status}). Is ${BASE_URL} reachable?`);
-  mkdirSync(STATE_DIR, { recursive: true });
-  writeFileSync(TOKEN_FILE, data.token, { mode: 0o600 });
-  return data.token;
+  const who = id?.signedIn && id.email ? ` as ${id.email}` : "";
+  throw new Error(`Not signed in — run \`drafty login\`${who} to use Drafty.  (The no-install demo lives at ${BASE_URL}/get.)`);
 }
 
 type ApiOpts = { method?: "GET" | "POST"; body?: Record<string, unknown>; query?: Record<string, string>; token?: string };
@@ -733,10 +721,6 @@ it into a real account in place. Point at another server with DRAFTY_BASE_URL.
 
 async function main() {
   const [cmd, ...args] = process.argv.slice(2);
-  // If a prior command already detected a lost session, keep it visible on every
-  // run until the human re-logs in (cheap, no network — just reads the marker).
-  const _id = readIdentity();
-  if (_id?.signedIn && _id.sessionLost) warnSessionLost(_id.email);
   switch (cmd) {
     case "push": return push(args);
     case "mode": return setMode(args);
