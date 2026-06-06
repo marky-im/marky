@@ -226,12 +226,13 @@ async function getToken(): Promise<string> {
 }
 
 type ApiOpts = { method?: "GET" | "POST"; body?: Record<string, unknown>; query?: Record<string, string>; token?: string };
-// Transient server hiccups — the legacy Instant core-client's ~6s mutation-ack
-// timeout, a cold function, or a 5xx — shouldn't surface to the user on their
-// primary action. A "timed out" almost always means the write never committed,
-// so a quiet retry is safe; on the rare commit-but-lost-response it just adds a
-// duplicate revision (cosmetic in History). Bounded so a real outage still fails.
-const RETRIABLE = /timed out|timeout|ECONNRESET|ECONNREFUSED|fetch failed|network|socket hang up/i;
+// Transient server hiccups — the legacy core-client's ~6s mutation-ack timeout,
+// a cold function, the admin-path read raising "the query took too long to
+// complete", or a 5xx — shouldn't surface to the user on their primary action.
+// A timeout almost always means the write never committed, so a quiet retry is
+// safe; on the rare commit-but-lost-response it just adds a duplicate revision
+// (cosmetic in History). Bounded so a real outage still fails.
+const RETRIABLE = /timed out|timeout|too long|ECONNRESET|ECONNREFUSED|fetch failed|network|socket hang up/i;
 function isRetriable(status: number, msg: string): boolean {
   return status === 502 || status === 503 || status === 504 || RETRIABLE.test(msg);
 }
