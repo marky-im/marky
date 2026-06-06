@@ -226,19 +226,45 @@ async function getToken(): Promise<string> {
 }
 
 type ApiOpts = { method?: "GET" | "POST"; body?: Record<string, unknown>; query?: Record<string, string>; token?: string };
+// Transient server hiccups — the legacy Instant core-client's ~6s mutation-ack
+// timeout, a cold function, or a 5xx — shouldn't surface to the user on their
+// primary action. A "timed out" almost always means the write never committed,
+// so a quiet retry is safe; on the rare commit-but-lost-response it just adds a
+// duplicate revision (cosmetic in History). Bounded so a real outage still fails.
+const RETRIABLE = /timed out|timeout|ECONNRESET|ECONNREFUSED|fetch failed|network|socket hang up/i;
+function isRetriable(status: number, msg: string): boolean {
+  return status === 502 || status === 503 || status === 504 || RETRIABLE.test(msg);
+}
+const nap = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 async function api(op: string, opts: ApiOpts = {}): Promise<any> {
   // Most ops act as *you* (the stored identity). `claim` is the exception — it
   // must authorize with the canvas's provision token, so callers pass it in.
   const token = opts.token ?? (await getToken());
   const qs = opts.query ? "?" + new URLSearchParams(opts.query).toString() : "";
-  const res = await fetch(`${BASE_URL}/get/api/${op}${qs}`, {
+  const reqInit = {
     method: opts.method ?? "POST",
     headers: { authorization: `Bearer ${token}`, ...(opts.body ? { "content-type": "application/json" } : {}) },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
-  });
-  const data: any = await res.json().catch(() => ({}));
-  if (!res.ok || data.ok === false) die(data.error || `${op} failed (${res.status})`);
-  return data;
+  };
+  const MAX = 3;
+  let lastErr = `${op} failed`;
+  for (let attempt = 1; attempt <= MAX; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(`${BASE_URL}/get/api/${op}${qs}`, reqInit);
+    } catch (e: any) {
+      lastErr = String(e?.message || e);
+      if (attempt < MAX && isRetriable(0, lastErr)) { await nap(300 * attempt); continue; }
+      die(lastErr);
+    }
+    const data: any = await res.json().catch(() => ({}));
+    if (res.ok && data.ok !== false) return data;
+    lastErr = data.error || `${op} failed (${res.status})`;
+    if (attempt < MAX && isRetriable(res.status, lastErr)) { await nap(300 * attempt); continue; }
+    die(lastErr);
+  }
+  die(lastErr); // unreachable — the loop always returns or dies
 }
 
 // ── commands ────────────────────────────────────────────────────────────────
