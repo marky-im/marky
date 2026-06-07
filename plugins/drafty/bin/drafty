@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Marky launcher. While the plugin is enabled this is on the Bash tool's PATH,
-# so `marky <command>` just works — no separate `setup` step. Requires `bun`
+# Drafty launcher. While the plugin is enabled this is on the Bash tool's PATH,
+# so `drafty <command>` just works — no separate `setup` step. Requires `bun`
 # (https://bun.sh).
 #
 # Self-resolving shim: rather than run *this* copy's CLI, it finds the newest
 # installed plugin version in the cache and runs that. So a plugin update is
-# picked up on the very next `marky` call without a `/reload-plugins` — Claude
+# picked up on the very next `drafty` call without a `/reload-plugins` — Claude
 # Code pins the on-PATH launcher to its version dir, but this launcher doesn't
 # care which dir it lives in; it always execs the latest one on disk.
 set -euo pipefail
 
 self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # .../<version>/bin
-base="$(cd "$self/../.." && pwd)"                       # .../marky-im/marky (holds version dirs)
+base="$(cd "$self/../.." && pwd)"                       # .../drafty-im/drafty (holds version dirs)
 
 # Newest installed version dir (semver order). Empty if the layout isn't the
 # versioned cache (e.g. running straight from a git checkout).
@@ -27,7 +27,7 @@ if [ -z "$newest" ] || [ ! -f "$root/cli/canvas.ts" ]; then
 fi
 
 if ! command -v bun >/dev/null 2>&1; then
-  echo "marky: needs 'bun' on PATH — install it from https://bun.sh, then retry." >&2
+  echo "drafty: needs 'bun' on PATH — install it from https://bun.sh, then retry." >&2
   exit 127
 fi
 
