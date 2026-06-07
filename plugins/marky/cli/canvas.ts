@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// marky CLI — publish docs to marky.im/canvas/<slug>, then read and reply to
+// marky CLI — publish canvases to marky.im/canvas/<slug>, then read and reply to
 // feedback as Claude.
 //
 // A thin HTTP/SSE client: it holds a per-user guest token (minted by the server,
@@ -197,7 +197,7 @@ function parseMode(value: string | undefined): Mode | undefined {
 }
 function modeLine(mode: Mode, slug: string): string {
   if (mode === "readonly") return "view only — comments are off";
-  if (mode === "feedback") return `people can comment; Claude waits for your go — run \`marky documents mode ${slug} live\``;
+  if (mode === "feedback") return `people can comment; Claude waits for your go — run \`marky canvas mode ${slug} live\``;
   return "Claude works new comments as they arrive";
 }
 
@@ -386,9 +386,9 @@ async function uploadLocalAssets(content: string, file: string): Promise<string>
 }
 
 // ── commands ────────────────────────────────────────────────────────────────
-async function documentsPush(args: string[]) {
+async function canvasPush(args: string[]) {
   const file = args[0];
-  if (!file) return die("usage: marky documents push <file> [--title T] [--slug S] [--mode M] [--project P] [--status S] [--tag T …]");
+  if (!file) return die("usage: marky canvas push <file> [--title T] [--slug S] [--mode M] [--project P] [--status S] [--tag T …]");
   const content = await Bun.file(file).text();
   if (!content.trim()) return die(`file is empty: ${file}`);
   const format = inferFormat(file);
@@ -404,7 +404,7 @@ async function documentsPush(args: string[]) {
   // left as-is (small + editable). Titles are inferred from the original content.
   const published = await uploadLocalAssets(content, file);
   // targetSlug = update intent (exact); newSlug = pre-hashed slug if we create.
-  const r = await api("documents.push", {
+  const r = await api("canvas.push", {
     body: { content: published, format, title, targetSlug: slug, newSlug: slugify(slug || title), ...(mode ? { mode } : {}) },
   });
   if (r.created) {
@@ -424,12 +424,12 @@ async function documentsPush(args: string[]) {
     if (project !== undefined) meta.project = project;
     if (status !== undefined) meta.status = status;
     if (tags.length) meta.addTags = tags;
-    const summary = fmtMeta(await api("documents.set", { body: meta }));
+    const summary = fmtMeta(await api("canvas.set", { body: meta }));
     if (summary) console.log(`  ${summary}`);
   }
 
   if (r.created && r.mode === "feedback") {
-    console.log(`  Claude waits for your go — run \`marky documents mode ${r.slug} live\` to work comments live`);
+    console.log(`  Claude waits for your go — run \`marky canvas mode ${r.slug} live\` to work comments live`);
   }
   await track("canvas.published", { slug: r.slug, created: !!r.created, format, mode: r.mode });
 }
@@ -479,23 +479,23 @@ async function commentsStatus(args: string[], status: "open" | "completed") {
   await track(status === "completed" ? "thread.resolved" : "thread.reopened", { annotationId: annId, by: "agent" });
 }
 
-async function documentsRestore(args: string[]) {
+async function canvasRestore(args: string[]) {
   const [slug, revisionId] = args;
-  if (!slug || !revisionId) return die("usage: marky documents restore <slug> <revisionId>");
-  await api("documents.restore", { body: { slug, revisionId } });
+  if (!slug || !revisionId) return die("usage: marky canvas restore <slug> <revisionId>");
+  await api("canvas.restore", { body: { slug, revisionId } });
   console.log(`✓ restored ${slug} to revision ${revisionId}`);
 }
 
 // Download the artifact body. Content goes to stdout (newline-terminated) so it
 // pipes/redirects cleanly; metadata goes to stderr. --revision pulls a past
-// version (ids come from `marky documents versions`); -o/--out writes a file instead.
-async function documentsPull(args: string[]) {
+// version (ids come from `marky canvas versions`); -o/--out writes a file instead.
+async function canvasPull(args: string[]) {
   const slug = args[0];
-  if (!slug || slug.startsWith("--")) return die("usage: marky documents pull <slug> [--revision <id>] [-o <file>] [--json]");
+  if (!slug || slug.startsWith("--")) return die("usage: marky canvas pull <slug> [--revision <id>] [-o <file>] [--json]");
   const revisionId = flag(args, "revision") || flag(args, "rev");
   const outIdx = args.indexOf("-o");
   const out = flag(args, "out") || (outIdx >= 0 ? args[outIdx + 1] : undefined);
-  const r = await api("documents.pull", { method: "GET", query: { slug, ...(revisionId ? { revisionId } : {}) } });
+  const r = await api("canvas.pull", { method: "GET", query: { slug, ...(revisionId ? { revisionId } : {}) } });
   if (has(args, "json")) {
     console.log(JSON.stringify({ slug, title: r.title, format: r.format, revisionId: r.revisionId, createdAt: r.createdAt, content: r.content }, null, 2));
   } else {
@@ -513,10 +513,10 @@ async function documentsPull(args: string[]) {
   await track("canvas.pulled", { slug, revision: r.revisionId || "current", out: out ? "file" : "stdout" });
 }
 
-async function documentsVersions(args: string[]) {
+async function canvasVersions(args: string[]) {
   const slug = args[0];
-  if (!slug || slug.startsWith("--")) return die("usage: marky documents versions <slug> [--json]");
-  const r = await api("documents.versions", { method: "GET", query: { slug } });
+  if (!slug || slug.startsWith("--")) return die("usage: marky canvas versions <slug> [--json]");
+  const r = await api("canvas.versions", { method: "GET", query: { slug } });
   const revs = r.revisions as any[];
   if (has(args, "json")) {
     console.log(JSON.stringify({ slug, title: r.title, revisions: revs }, null, 2));
@@ -527,55 +527,55 @@ async function documentsVersions(args: string[]) {
   for (const v of revs) {
     console.log(v.id);
     console.log(`  ${new Date(v.createdAt).toLocaleString()} · ${v.authorName} (${v.authorKind})${v.note ? ` · ${v.note}` : ""}`);
-    console.log(`  pull: marky documents pull ${slug} --revision ${v.id}\n`);
+    console.log(`  pull: marky canvas pull ${slug} --revision ${v.id}\n`);
   }
 }
 
-async function documentsMode(args: string[]) {
+async function canvasMode(args: string[]) {
   const slug = args[0];
   const mode = parseMode(args[1]);
-  if (!slug || !mode) return die(`usage: marky documents mode <slug> <${MODES.join("|")}>`);
-  await api("documents.mode", { body: { slug, mode } });
+  if (!slug || !mode) return die(`usage: marky canvas mode <slug> <${MODES.join("|")}>`);
+  await api("canvas.mode", { body: { slug, mode } });
   console.log(`✓ ${slug} is ${modeLabel[mode]}`);
   console.log(`  ${modeLine(mode, slug)}`);
 }
 
 // Archive/unarchive: a hide flag. Archived canvases keep their status but drop
-// out of `marky documents ls` and are parked for the Claude loop — the link still works.
-async function documentsArchive(args: string[], archived: boolean) {
+// out of `marky canvas ls` and are parked for the Claude loop — the link still works.
+async function canvasArchive(args: string[], archived: boolean) {
   const slug = args[0];
-  if (!slug || slug.startsWith("--")) return die(`usage: marky documents ${archived ? "archive" : "unarchive"} <slug>`);
-  await api("documents.set", { body: { slug, archived } });
-  if (archived) console.log(`✓ archived ${slug} — hidden from \`marky documents ls\` (link still opens); show with --archived`);
-  else console.log(`✓ unarchived ${slug} — back in \`marky documents ls\``);
+  if (!slug || slug.startsWith("--")) return die(`usage: marky canvas ${archived ? "archive" : "unarchive"} <slug>`);
+  await api("canvas.set", { body: { slug, archived } });
+  if (archived) console.log(`✓ archived ${slug} — hidden from \`marky canvas ls\` (link still opens); show with --archived`);
+  else console.log(`✓ unarchived ${slug} — back in \`marky canvas ls\``);
 }
 
 // Cross-cutting labels for what a canvas *is* (plan, research, testing-report…).
 // `tag` adds, `untag` removes (or --all clears). The server normalises + dedupes
 // and returns the resulting set, which we echo back.
-async function documentsTag(args: string[], add: boolean) {
+async function canvasTag(args: string[], add: boolean) {
   const slug = args[0];
   if (!slug || slug.startsWith("--")) {
-    return die(add ? "usage: marky documents tag <slug> <label> [label…]" : "usage: marky documents untag <slug> <label> [label…]   (or --all)");
+    return die(add ? "usage: marky canvas tag <slug> <label> [label…]" : "usage: marky canvas untag <slug> <label> [label…]   (or --all)");
   }
   const labels = args.slice(1).filter((a) => !a.startsWith("--"));
   const body: Record<string, unknown> = { slug };
   if (!add && has(args, "all")) body.tags = []; // clear every tag
   else if (labels.length) body[add ? "addTags" : "removeTags"] = labels;
-  else return die(add ? "give at least one label: marky documents tag <slug> <label> [label…]" : "give a label to remove, or --all to clear");
-  const r = await api("documents.set", { body });
+  else return die(add ? "give at least one label: marky canvas tag <slug> <label> [label…]" : "give a label to remove, or --all to clear");
+  const r = await api("canvas.set", { body });
   const tags = (r.tags as string[]) || [];
   console.log(`✓ ${slug} — ${tags.length ? tags.map((t) => `#${t}`).join(" ") : "(no tags)"}`);
 }
 
-// `documents set` — the single organizer for an existing doc, in one call and
+// `canvas set` — the single organizer for an existing canvas, in one call and
 // without re-publishing: --project P | --no-project, --status <todo|doing|done>,
 // --tag T… (add), --untag T… (remove), --clear-tags. The primitive for filing one
-// doc or a whole tidy-up pass (`documents ls --unfiled`).
-async function documentsSet(args: string[]) {
+// canvas or a whole tidy-up pass (`canvas ls --unfiled`).
+async function canvasSet(args: string[]) {
   const slug = args[0];
   if (!slug || slug.startsWith("--")) {
-    return die("usage: marky documents set <slug> [--project P | --no-project] [--status S] [--tag T…] [--untag T…] [--clear-tags]");
+    return die("usage: marky canvas set <slug> [--project P | --no-project] [--status S] [--tag T…] [--untag T…] [--clear-tags]");
   }
   const meta: Record<string, unknown> = { slug };
   if (has(args, "no-project")) meta.project = "";
@@ -587,7 +587,7 @@ async function documentsSet(args: string[]) {
     const rm = multiFlag(args, "untag"); if (rm.length) meta.removeTags = rm;
   }
   if (Object.keys(meta).length === 1) return die("nothing to set — pass --project/--no-project, --status, --tag, --untag, and/or --clear-tags");
-  const summary = fmtMeta(await api("documents.set", { body: meta }));
+  const summary = fmtMeta(await api("canvas.set", { body: meta }));
   console.log(`✓ ${slug}${summary ? " — " + summary : " — cleared"}`);
 }
 
@@ -684,11 +684,11 @@ function requireYes(args: string[], what: string) {
   if (!has(args, "yes")) die(`${what} is destructive — re-run with --yes to confirm.`);
 }
 
-async function documentsRename(args: string[]) {
+async function canvasRename(args: string[]) {
   const slug = args[0];
   const title = args.slice(1).filter((a) => !a.startsWith("--")).join(" ").trim();
-  if (!slug || !title) return die('usage: marky documents rename <slug> "<new name>"');
-  await api("documents.rename", { body: { slug, title } });
+  if (!slug || !title) return die('usage: marky canvas rename <slug> "<new name>"');
+  await api("canvas.rename", { body: { slug, title } });
   console.log(`✓ renamed to "${title}"`);
 }
 
@@ -714,17 +714,17 @@ async function commentsClear(args: string[]) {
   console.log(`✓ cleared ${r.threads ?? 0} thread(s) on ${slug}`);
 }
 
-async function documentsRm(args: string[]) {
+async function canvasRm(args: string[]) {
   const slug = args.find((a) => !a.startsWith("--"));
-  if (!slug) return die("usage: marky documents rm <slug> --yes");
+  if (!slug) return die("usage: marky canvas rm <slug> --yes");
   requireYes(args, `removing canvas ${slug}`);
-  await api("documents.rm", { body: { slug } });
+  await api("canvas.rm", { body: { slug } });
   console.log(`✓ removed canvas ${slug}`);
 }
 
 // Print canvases grouped by project (named projects alphabetical, ungrouped
 // last), each row showing status icon · slug · title · tags · open count.
-// Shared by `docs` and `context` so a canvas always renders the same way.
+// Shared by `canvases` and `context` so a canvas always renders the same way.
 function printCanvasGroups(items: any[]) {
   const groups = new Map<string, any[]>();
   for (const d of items) {
@@ -753,8 +753,8 @@ function printCanvasGroups(items: any[]) {
 // List your canvases, grouped by project and showing task status. Archived
 // canvases are hidden unless --archived. Filter with --status <todo|doing|done>
 // and --project "<name>". --json emits the (filtered) rows for tooling.
-async function documentsLs(args: string[] = []) {
-  const r = await api("documents.ls", { method: "GET" });
+async function canvasLs(args: string[] = []) {
+  const r = await api("canvas.ls", { method: "GET" });
   let items = r.items as any[];
 
   if (!has(args, "archived") && !has(args, "all")) items = items.filter((d) => !d.archived);
@@ -771,27 +771,27 @@ async function documentsLs(args: string[] = []) {
     items = items.filter((d) => Array.isArray(d.tags) && d.tags.includes(want));
   }
   // Unfiled = not fully organized: missing a project OR has no tags. The work-list
-  // for a tidy-up pass (`marky documents set <slug> …`).
+  // for a tidy-up pass (`marky canvas set <slug> …`).
   const unfiled = has(args, "unfiled");
   if (unfiled) items = items.filter((d) => !d.project || !(Array.isArray(d.tags) && d.tags.length));
 
   if (has(args, "json")) { console.log(JSON.stringify(items, null, 2)); return; }
 
   if (!items.length) {
-    console.log(unfiled ? "✓ every canvas has a project and tags — nothing to file" : statusFilter || projectFilter ? "(no canvases match that filter)" : "(no canvases yet — publish one with `marky documents push <file>`)");
+    console.log(unfiled ? "✓ every canvas has a project and tags — nothing to file" : statusFilter || projectFilter ? "(no canvases match that filter)" : "(no canvases yet — publish one with `marky canvas push <file>`)");
     return;
   }
   printCanvasGroups(items);
 }
 
-// Show one doc's metadata — title, link, status, project, tags, mode, thread
-// counts. Composed from your `documents ls` data (your own docs only).
-async function documentsShow(args: string[]) {
+// Show one canvas's metadata — title, link, status, project, tags, mode, thread
+// counts. Composed from your `canvas ls` data (your own canvases only).
+async function canvasShow(args: string[]) {
   const slug = args[0];
-  if (!slug || slug.startsWith("--")) return die("usage: marky documents show <slug>");
-  const r = await api("documents.ls", { method: "GET" });
+  if (!slug || slug.startsWith("--")) return die("usage: marky canvas show <slug>");
+  const r = await api("canvas.ls", { method: "GET" });
   const d = (r.items as any[]).find((x) => x.slug === slug);
-  if (!d) return die(`no doc "${slug}" under your account — try \`marky documents ls\``);
+  if (!d) return die(`no canvas "${slug}" under your account — try \`marky canvas ls\``);
   if (has(args, "json")) { console.log(JSON.stringify(d, null, 2)); return; }
   const st = (d.status || "todo") as Status;
   const tags = Array.isArray(d.tags) && d.tags.length ? "   " + d.tags.map((t: string) => `#${t}`).join(" ") : "";
@@ -830,7 +830,7 @@ function gitContext(): { cwd: string; root: string | null; repo: string | null; 
 async function context(args: string[] = []) {
   const [me, docsRes] = await Promise.all([
     api("whoami", { method: "GET" }),
-    api("documents.ls", { method: "GET" }),
+    api("canvas.ls", { method: "GET" }),
   ]);
   const all = (docsRes.items as any[]) || [];
   const items = has(args, "archived") || has(args, "all") ? all : all.filter((d) => !d.archived);
@@ -878,12 +878,12 @@ async function context(args: string[] = []) {
   console.log(`\nProjects (${projects.length})${projLine ? ":  " + projLine : ""}`);
   console.log(`Tags (${tags.length})${tags.length ? ":      " + tags.map((t) => `#${t.name} (${t.count})`).join(" · ") : ""}`);
   if (archived) console.log(`Archived:    ${archived} hidden (pass --archived to include)`);
-  if (unfiled) console.log(`Unfiled:     ${unfiled} missing a project or tags — \`marky documents ls --unfiled\`, then \`marky documents set <slug> …\``);
+  if (unfiled) console.log(`Unfiled:     ${unfiled} missing a project or tags — \`marky canvas ls --unfiled\`, then \`marky canvas set <slug> …\``);
 
-  if (!items.length) { console.log(`\n(no canvases yet — publish one with \`marky documents push <file>\`)`); return; }
+  if (!items.length) { console.log(`\n(no canvases yet — publish one with \`marky canvas push <file>\`)`); return; }
   console.log(`\nMost recent${more > 0 ? ` ${shown.length} of ${items.length}` : ""}:`);
   printCanvasGroups(shown);
-  if (more > 0) console.log(`\n  …+${more} more — \`marky documents ls\` for the full list, or \`marky documents ls --project <name>\` to drill in`);
+  if (more > 0) console.log(`\n  …+${more} more — \`marky canvas ls\` for the full list, or \`marky canvas ls --project <name>\` to drill in`);
   console.log(`\nReuse a project/tag above before inventing a new one. To update a canvas, push its exact slug; otherwise a push creates a new one.`);
 }
 
@@ -891,15 +891,15 @@ async function context(args: string[] = []) {
 // (which owns the canvas) authorizes the transfer; the new owner is *you*, the
 // stored identity. The agent that created the canvas holds that token — pass it
 // via MARKY_TOKEN or --token. After this the canvas stops being ephemeral and
-// shows up in `marky documents ls`.
-async function documentsClaim(args: string[]) {
+// shows up in `marky canvas ls`.
+async function canvasClaim(args: string[]) {
   const slug = args.find((a) => !a.startsWith("--"));
-  if (!slug) return die("usage: MARKY_TOKEN=<provision token> marky documents claim <slug>");
+  if (!slug) return die("usage: MARKY_TOKEN=<provision token> marky canvas claim <slug>");
   const provisionToken = process.env.MARKY_TOKEN || flag(args, "token");
   if (!provisionToken) {
     return die(
       "claim needs the canvas's provision token (the agent that created it holds it).\n" +
-        `  run:  MARKY_TOKEN=<token from /get/provision> marky documents claim ${slug}`,
+        `  run:  MARKY_TOKEN=<token from /get/provision> marky canvas claim ${slug}`,
     );
   }
   const me = await api("whoami", { method: "GET" }); // my identity = the new owner
@@ -908,12 +908,12 @@ async function documentsClaim(args: string[]) {
   if (me.isGuest) {
     console.error("Claiming keeps this canvas under your Marky account — sign in first:");
     console.error(`  marky login          opens your browser to sign in`);
-    console.error(`then re-run:  MARKY_TOKEN=… marky documents claim ${slug}`);
+    console.error(`then re-run:  MARKY_TOKEN=… marky canvas claim ${slug}`);
     process.exit(1);
   }
-  await api("documents.claim", { token: provisionToken, body: { slug, newCreatorId: me.userId } });
+  await api("canvas.claim", { token: provisionToken, body: { slug, newCreatorId: me.userId } });
   const who = me.email ? ` (${me.email})` : "";
-  console.error(`✓ claimed — ${url(slug)} is yours now${who}. It won't expire, and it's in \`marky documents ls\`.`);
+  console.error(`✓ claimed — ${url(slug)} is yours now${who}. It won't expire, and it's in \`marky canvas ls\`.`);
   // The demo→real conversion event — the activation funnel's bottom.
   await track("canvas.claimed", { slug });
 }
@@ -1147,25 +1147,25 @@ async function changelog(args: string[]) {
   process.stdout.write(await res.text());
 }
 
-const HELP = `marky — publish docs for annotation, read & reply to the comments
+const HELP = `marky — publish canvases for annotation, read & reply to the comments
 
-DOCUMENTS — the doc you publish
-  marky documents push <file> [--title T] [--slug S] [--mode M] [--project P] [--status S] [--tag T …]   publish/update + file it
-  marky documents ls [--status S] [--project P] [--tag T] [--unfiled] [--archived] [--json]   list your docs
-  marky documents show <slug>                meta: title, link, status, project, tags, mode, threads
-  marky documents pull <slug> [--revision id] [-o f]   download the content
-  marky documents versions <slug> [--json]   list a doc's versions, newest first
-  marky documents restore <slug> <revisionId>   restore to a past version
-  marky documents rename <slug> "<title>"
-  marky documents set <slug> [--project P|--no-project] [--status S] [--tag T…] [--untag T…] [--clear-tags]   organize
-  marky documents tag <slug> <label…> / untag <slug> <label…>   add/remove kind labels
-  marky documents archive <slug> / unarchive <slug>   hide from / restore to \`documents ls\`
-  marky documents mode <slug> <readonly|feedback|live>   how it behaves when shared
-  marky documents rm <slug> --yes            remove a doc entirely
-  marky documents claim <slug>               keep a provisional doc (MARKY_TOKEN=<provision token>)
+CANVAS — the canvas you publish
+  marky canvas push <file> [--title T] [--slug S] [--mode M] [--project P] [--status S] [--tag T …]   publish/update + file it
+  marky canvas ls [--status S] [--project P] [--tag T] [--unfiled] [--archived] [--json]   list your canvases
+  marky canvas show <slug>                meta: title, link, status, project, tags, mode, threads
+  marky canvas pull <slug> [--revision id] [-o f]   download the content
+  marky canvas versions <slug> [--json]   list a canvas's versions, newest first
+  marky canvas restore <slug> <revisionId>   restore to a past version
+  marky canvas rename <slug> "<title>"
+  marky canvas set <slug> [--project P|--no-project] [--status S] [--tag T…] [--untag T…] [--clear-tags]   organize
+  marky canvas tag <slug> <label…> / untag <slug> <label…>   add/remove kind labels
+  marky canvas archive <slug> / unarchive <slug>   hide from / restore to \`canvas ls\`
+  marky canvas mode <slug> <readonly|feedback|live>   how it behaves when shared
+  marky canvas rm <slug> --yes            remove a canvas entirely
+  marky canvas claim <slug>               keep a provisional canvas (MARKY_TOKEN=<provision token>)
 
-COMMENTS — threads pinned to a doc, and their replies
-  marky comments ls <slug> [--json] [--open]   threads + replies on a doc
+COMMENTS — threads pinned to a canvas, and their replies
+  marky comments ls <slug> [--json] [--open]   threads + replies on a canvas
   marky comments inbox [slug] [--json] [--all]   fresh threads that need Claude
   marky comments watch <slug> [--json] [--backlog]   stream new comments live (SSE doorbell)
   marky comments reply <annotationId> "<message>"   reply in a thread as Claude
@@ -1173,9 +1173,9 @@ COMMENTS — threads pinned to a doc, and their replies
   marky comments resolve <annotationId> / reopen <annotationId>   toggle a thread's done state
   marky comments rm <annotationId>           delete a thread (+ its replies)
   marky comments rm-reply <commentId>        delete a single reply
-  marky comments clear <slug> --yes          delete all threads on a doc
+  marky comments clear <slug> --yes          delete all threads on a canvas
 
-  marky context [--limit N] [--archived] [--json]   one-shot orientation: identity, git, projects, tags + recent docs
+  marky context [--limit N] [--archived] [--json]   one-shot orientation: identity, git, projects, tags + recent canvases
   marky changelog [--json]                   what shipped, by week
   marky login / logout                       sign in (browser; web + CLI) / sign out
   marky whoami                               show your identity
@@ -1187,21 +1187,21 @@ it into a real account in place. Point at another server with MARKY_BASE_URL.
 `;
 
 // Namespaced verb tables — `marky <namespace> <verb> [args]`. The namespace
-// disambiguates same-named verbs (`documents ls` vs `comments ls`).
+// disambiguates same-named verbs (`canvas ls` vs `comments ls`).
 type Cmd = (args: string[]) => unknown;
-const DOCUMENTS: Record<string, Cmd> = {
-  push: documentsPush, ls: documentsLs, show: documentsShow, pull: documentsPull,
-  versions: documentsVersions, restore: documentsRestore, rename: documentsRename,
-  set: documentsSet, tag: (a) => documentsTag(a, true), untag: (a) => documentsTag(a, false),
-  archive: (a) => documentsArchive(a, true), unarchive: (a) => documentsArchive(a, false),
-  mode: documentsMode, rm: documentsRm, claim: documentsClaim,
+const CANVAS: Record<string, Cmd> = {
+  push: canvasPush, ls: canvasLs, show: canvasShow, pull: canvasPull,
+  versions: canvasVersions, restore: canvasRestore, rename: canvasRename,
+  set: canvasSet, tag: (a) => canvasTag(a, true), untag: (a) => canvasTag(a, false),
+  archive: (a) => canvasArchive(a, true), unarchive: (a) => canvasArchive(a, false),
+  mode: canvasMode, rm: canvasRm, claim: canvasClaim,
 };
 const COMMENTS: Record<string, Cmd> = {
   ls: commentsLs, inbox: commentsInbox, watch: commentsWatch, reply: commentsReply, working: commentsWorking,
   resolve: (a) => commentsStatus(a, "completed"), reopen: (a) => commentsStatus(a, "open"),
   rm: commentsRm, "rm-reply": commentsRmReply, clear: commentsClear,
 };
-// Top-level: session / meta — not scoped to a doc or a comment.
+// Top-level: session / meta — not scoped to a canvas or a comment.
 const TOP: Record<string, Cmd> = { context, changelog, login, logout, whoami, setup, doctor };
 
 function runGroup(name: string, table: Record<string, Cmd>, args: string[]) {
@@ -1217,7 +1217,9 @@ function runGroup(name: string, table: Record<string, Cmd>, args: string[]) {
 
 async function main() {
   const [head, ...rest] = process.argv.slice(2);
-  if (head === "documents" || head === "document" || head === "doc") return runGroup("documents", DOCUMENTS, rest);
+  // `canvas` is canonical; `canvases`/`documents`/`document`/`doc` stay as aliases
+  // so existing muscle memory and older docs keep working.
+  if (["canvas", "canvases", "documents", "document", "doc"].includes(head)) return runGroup("canvas", CANVAS, rest);
   if (head === "comments" || head === "comment") return runGroup("comments", COMMENTS, rest);
   if (head && TOP[head]) return TOP[head](rest);
   console.log(HELP);

@@ -1,11 +1,11 @@
 ---
 name: marky
-description: Share a Markdown/HTML doc (a plan, draft, design, page) to marky.im/canvas/<slug> where the user and anyone they invite can drop Figma-style threaded comments anchored to specific elements. Read that feedback, reply on the canvas or in chat, mark items done, and push an updated version. Use when the user says "marky it", "marky this", "marky that", "marky <file>", "share this for feedback", "put this on a canvas", "send this to the canvas", "what did they comment", "read the canvas comments", "address the feedback", "update the canvas", or pastes a marky.im/canvas/ URL. Also covers auth — "marky login", "marky auth", "marky signup", "sign in to marky", "sign up", "authenticate", or "claim my canvases" all map to the marky login command. And "update marky", "upgrade marky", or "is marky up to date" map to updating the plugin (claude plugin update marky@marky-im, then ask the user to run /reload-plugins).
+description: Share a Markdown/HTML canvas (a plan, draft, design, page) to marky.im/canvas/<slug> where the user and anyone they invite can drop Figma-style threaded comments anchored to specific elements. Read that feedback, reply on the canvas or in chat, mark items done, and push an updated version. Use when the user says "marky it", "marky this", "marky that", "marky <file>", "share this for feedback", "put this on a canvas", "send this to the canvas", "what did they comment", "read the canvas comments", "address the feedback", "update the canvas", or pastes a marky.im/canvas/ URL. Also covers auth — "marky login", "marky auth", "marky signup", "sign in to marky", "sign up", "authenticate", or "claim my canvases" all map to the marky login command. And "update marky", "upgrade marky", or "is marky up to date" map to updating the plugin (claude plugin update marky@marky-im, then ask the user to run /reload-plugins).
 ---
 
 # Marky — comment on Claude artifacts, Claude edits them
 
-A canvas is a published doc that people annotate like Figma comments: hover any
+A canvas is a published artifact that people annotate like Figma comments: hover any
 element, click to attach a threaded comment, mark threads complete. You (Claude)
 are a first-class participant — you can read comments, reply on the canvas, mark
 things done, and publish revised versions. The browser updates live.
@@ -15,7 +15,7 @@ local `marky` command — no inline bearer tokens, no hand-rolled `curl` — so 
 isn't the exfiltration-shaped raw-HTTP call a safety classifier blocks. (The
 no-install `marky.im/get` flow drives the same API over raw `curl`; that path is
 demo-only by design — see `web/src/lib/get-guide.ts`.) Once the plugin is
-installed, always use `marky documents push <file>`, never raw `curl`, for the user's work.
+installed, always use `marky canvas push <file>`, never raw `curl`, for the user's work.
 
 ## "marky it" — the verb
 
@@ -25,14 +25,14 @@ in this order:
 
 1. **A file/path or URL named in the same breath** ("marky `plan.md`",
    "marky `docs/initiatives/x.html`") → that file.
-2. **The artifact we just produced or edited this session** — the doc you just
+2. **The artifact we just produced or edited this session** — the canvas you just
    wrote, the plan you just drafted → that file. This is the common case.
 3. **The thing under active discussion** — if the conversation has centered on one
-   doc/draft, that's "it".
+   canvas/draft, that's "it".
 
-Then just run the **share-a-draft** flow: `marky documents push <file>` (feedback mode by
+Then just run the **share-a-draft** flow: `marky canvas push <file>` (feedback mode by
 default) and hand back the URL. **File it as you publish** — add `--project <initiative>`
-and a kind `--tag` (and a real `--title`) so it lands organized in `marky documents ls`, not loose.
+and a kind `--tag` (and a real `--title`) so it lands organized in `marky canvas ls`, not loose.
 If you're unsure which project/tags exist or whether this should update an existing canvas,
 run **`marky context`** first (one call: git repo, projects, tags, recent canvases). See
 **Organize it yourself** below.
@@ -43,14 +43,14 @@ unique across every user* (`slug` is `.unique()` in the schema), so the hash is
 what prevents a landgrab (two people can both have a `notes-*` canvas) and keeps
 the `noindex` URL unguessable. So:
 
-- **Creating:** usually just `marky documents push <file>` and let it name itself. Passing
+- **Creating:** usually just `marky canvas push <file>` and let it name itself. Passing
   `--slug <base>` is fine too — it's treated as a readable *base* and still gets a
   hash (`--slug notes` → `notes-9fk2q`). You can't accidentally land a bare slug.
 - **Updating:** pass the canvas's *exact full slug* (hash included) — that targets
   the existing canvas and is used verbatim, never re-hashed.
 
 **Only ask "marky what?" if the referent is genuinely ambiguous** (nothing recently
-written, no path named, no single doc in focus). A quick one-line clarification beats
+written, no path named, no single canvas in focus). A quick one-line clarification beats
 publishing the wrong thing.
 
 ## Setup
@@ -97,35 +97,35 @@ the update unprompted, since it changes their environment.
 
 | Command | What it does |
 |---|---|
-| `marky documents push <file> [--title T] [--slug S] [--mode M]` | Publish a `.md`/`.html` file → prints the URL. Re-push with `--slug` to update + snapshot a revision. New canvases default to `feedback` mode. |
-| `marky documents mode <slug> <readonly\|feedback\|live>` | Set how the canvas behaves when shared (see **Canvas modes** below). |
+| `marky canvas push <file> [--title T] [--slug S] [--mode M]` | Publish a `.md`/`.html` file → prints the URL. Re-push with `--slug` to update + snapshot a revision. New canvases default to `feedback` mode. |
+| `marky canvas mode <slug> <readonly\|feedback\|live>` | Set how the canvas behaves when shared (see **Canvas modes** below). |
 | `marky comments ls <slug> [--json] [--open]` | Snapshot every thread + comment (your reading view). `--open` hides resolved. |
 | `marky comments watch <slug> [--json] [--backlog]` | **Socket mode** — stream new human comments live to stdout. Run in background; surface comments to the user as they arrive. |
 | `marky comments inbox [slug] [--json] [--all]` | **Fresh threads that need Claude** — open, not already being worked on, latest comment from a human. Loop-safe (resolved/answered threads never reappear). A no-slug sweep only surfaces canvases set to `live`; pass a `slug` or `--all` to include `feedback` canvases too. |
 | `marky comments working <annotationId>` | Shimmer the thread on the canvas while you work on it. Stays on through replies; cleared by resolve/reopen (or after 10 min idle). |
 | `marky comments reply <annotationId> "<msg>"` | Reply in a thread, authored as Claude (shows on the canvas). |
 | `marky comments resolve <annotationId>` / `reopen <annotationId>` | Toggle a thread's completed state. |
-| `marky documents pull <slug> [--revision <id>] [-o <file>]` | Download the artifact body. Content goes to stdout (newline-terminated, so it pipes/redirects cleanly); metadata to stderr. `--revision` pulls a past version; `-o`/`--out` writes a file; `--json` returns the full envelope. |
-| `marky documents versions <slug> [--json]` | List a canvas's versions, newest first — each with its revision id, time, author, and note. Feed an id into `marky documents pull --revision` or `marky documents restore`. |
-| `marky documents restore <slug> <revisionId>` | Roll the doc back to a past version (revision ids come from `marky documents versions` or the web History panel). |
+| `marky canvas pull <slug> [--revision <id>] [-o <file>]` | Download the artifact body. Content goes to stdout (newline-terminated, so it pipes/redirects cleanly); metadata to stderr. `--revision` pulls a past version; `-o`/`--out` writes a file; `--json` returns the full envelope. |
+| `marky canvas versions <slug> [--json]` | List a canvas's versions, newest first — each with its revision id, time, author, and note. Feed an id into `marky canvas pull --revision` or `marky canvas restore`. |
+| `marky canvas restore <slug> <revisionId>` | Roll the canvas back to a past version (revision ids come from `marky canvas versions` or the web History panel). |
 | `marky context [--limit N] [--archived] [--json]` | **Orientation in one call** — identity, local git repo/branch, the projects + tags already in use (with counts), and the most-recent canvases (capped to ~15; `--limit 0` for all). Run it before a push/update to pick the project, reuse tags, and decide create-vs-update. |
-| `marky documents ls [--status S] [--project P] [--tag T] [--archived] [--json]` | List your canvases, **grouped by project** with each one's task status (`○ todo` / `◐ doing` / `✓ done`) and `#tags`. Archived canvases are hidden unless `--archived`. Filter with `--status <todo\|doing\|done>`, `--project "<name>"`, and/or `--tag <label>`. Aliases: `marky documents ls`. |
+| `marky canvas ls [--status S] [--project P] [--tag T] [--archived] [--json]` | List your canvases, **grouped by project** with each one's task status (`○ todo` / `◐ doing` / `✓ done`) and `#tags`. Archived canvases are hidden unless `--archived`. Filter with `--status <todo\|doing\|done>`, `--project "<name>"`, and/or `--tag <label>`. Aliases: `marky canvas ls`. |
 | `marky changelog [--json]` | What shipped on Marky, grouped by week (public feed; no sign-in needed). Use when the human asks "what's new in marky". |
 | `marky login` | Sign the human in — opens their browser; one sign-in covers web + CLI, and any canvases made before signing in fold into the account. `marky logout` signs out. |
-| `marky documents claim <slug>` | Take ownership of a *provisional* canvas (one minted by `/get/provision`) so it stops being ephemeral and lists under the human's account. Requires being signed in (`marky login` first); authorize the transfer with the canvas's provision token: `MARKY_TOKEN=<provision token> marky documents claim <slug>`. Only when the human asks to keep it. |
+| `marky canvas claim <slug>` | Take ownership of a *provisional* canvas (one minted by `/get/provision`) so it stops being ephemeral and lists under the human's account. Requires being signed in (`marky login` first); authorize the transfer with the canvas's provision token: `MARKY_TOKEN=<provision token> marky canvas claim <slug>`. Only when the human asks to keep it. |
 
 **Managing a canvas** (owner-only — you can delete anything on a canvas you published):
 
 | Command | What it does |
 |---|---|
-| `marky documents rename <slug> "<new name>"` | Rename a canvas (title only; the URL/slug is stable). |
-| `marky documents tag <slug> <label…>` / `marky documents untag <slug> <label…>` | Add/remove cross-cutting labels for *what the canvas is* — `plan`, `research`, `testing-report`, … A canvas can carry several; they're normalised (lowercased, `#` stripped, spaces → `-`). `untag --all` clears them. Status + project are set via `marky documents set` (below). |
-| `marky documents set <slug> [--project P] [--status S] [--tag T…] [--untag T…]` | Set project/status/tags on an existing canvas in **one call**, without re-publishing. The efficient primitive for filing a canvas (or a whole tidy-up pass). `--no-project` clears the project. |
-| `marky documents archive <slug>` / `marky documents unarchive <slug>` | Archive = hide from `marky documents ls` and **park it for the loop** (Claude won't auto-work its comments). The canvas keeps its status, and its link still opens + takes comments. Reverse with `unarchive`. |
+| `marky canvas rename <slug> "<new name>"` | Rename a canvas (title only; the URL/slug is stable). |
+| `marky canvas tag <slug> <label…>` / `marky canvas untag <slug> <label…>` | Add/remove cross-cutting labels for *what the canvas is* — `plan`, `research`, `testing-report`, … A canvas can carry several; they're normalised (lowercased, `#` stripped, spaces → `-`). `untag --all` clears them. Status + project are set via `marky canvas set` (below). |
+| `marky canvas set <slug> [--project P] [--status S] [--tag T…] [--untag T…]` | Set project/status/tags on an existing canvas in **one call**, without re-publishing. The efficient primitive for filing a canvas (or a whole tidy-up pass). `--no-project` clears the project. |
+| `marky canvas archive <slug>` / `marky canvas unarchive <slug>` | Archive = hide from `marky canvas ls` and **park it for the loop** (Claude won't auto-work its comments). The canvas keeps its status, and its link still opens + takes comments. Reverse with `unarchive`. |
 | `marky comments rm-reply <commentId>` | Delete one comment. |
 | `marky comments rm <annotationId>` | Delete a thread (annotation + its comments). |
-| `marky comments clear <slug> --yes` | Delete **all** threads on a canvas (keeps the doc). |
-| `marky documents rm <slug> --yes` | Remove a canvas entirely (doc + revisions + threads). |
+| `marky comments clear <slug> --yes` | Delete **all** threads on a canvas (keeps the canvas). |
+| `marky canvas rm <slug> --yes` | Remove a canvas entirely (canvas + revisions + threads). |
 
 Annotation ids are printed by `list`, `inbox`, and `watch` — copy them into `reply`/`resolve`.
 
@@ -142,10 +142,10 @@ user shouldn't run `marky` themselves — they speak, you run the command.
 | `live` | yes | **yes — work them as they arrive** |
 
 **Map plain language onto the command:**
-- "share this read-only" / "just to show" → `marky documents mode <slug> readonly`
+- "share this read-only" / "just to show" → `marky canvas mode <slug> readonly`
 - "open it for feedback" / "let people comment" / default share → `feedback`
-- "go live" / "start working the comments" → `marky documents mode <slug> live`
-- "park it" / "stop, I'll review myself" → `marky documents mode <slug> feedback`
+- "go live" / "start working the comments" → `marky canvas mode <slug> live`
+- "park it" / "stop, I'll review myself" → `marky canvas mode <slug> feedback`
 - "what are people saying?" → `marky comments inbox <slug> --all` or `marky comments ls <slug>` —
   **summarize; don't edit** unless the canvas is `live` or they tell you to.
 
@@ -159,13 +159,13 @@ watch doorbell for that canvas (`Monitor` on `marky comments watch <slug> --json
 - `feedback` means *don't touch it even though you're connected* — it holds
   regardless of whether a watch is running.
 - **On session start, re-arm watches for every canvas currently in `live` mode**
-  (check `marky documents ls`), so "live" survives across sessions. While you're not
+  (check `marky canvas ls`), so "live" survives across sessions. While you're not
   running, the canvas honestly shows "Claude offline" and comments queue.
 
 ## Organizing canvases (status · project · tags · archive)
 
 Beyond mode, a canvas carries four organizing axes — the owner's own backlog view,
-surfaced by `marky documents ls`:
+surfaced by `marky canvas ls`:
 
 - **status** — `todo` / `doing` / `done` (where it is)
 - **project** — one label = its home initiative, e.g. `marky` / `journeys` (where it lives)
@@ -174,13 +174,13 @@ surfaced by `marky documents ls`:
 
 Project is the single grouping; tags cut across projects. Drive them from natural language:
 
-- "mark X as done / in progress / todo" → `marky documents set <slug> --status <state>`
+- "mark X as done / in progress / todo" → `marky canvas set <slug> --status <state>`
 - "put these under <initiative>" / "group X with the landing work" →
-  `marky documents set <slug> --project "<name>"` (one per canvas; `--no-project` to remove)
-- "tag X as a research doc / plan / testing report" → `marky documents tag <slug> <label…>`
-  ("untag X" / "remove the plan tag" → `marky documents untag <slug> <label…>` or `--all`)
-- "archive X" / "I'm done with this, hide it" → `marky documents archive <slug>`
-- "show me my canvases" / "what research is in <initiative>?" → `marky documents ls`
+  `marky canvas set <slug> --project "<name>"` (one per canvas; `--no-project` to remove)
+- "tag X as a research canvas / plan / testing report" → `marky canvas tag <slug> <label…>`
+  ("untag X" / "remove the plan tag" → `marky canvas untag <slug> <label…>` or `--all`)
+- "archive X" / "I'm done with this, hide it" → `marky canvas archive <slug>`
+- "show me my canvases" / "what research is in <initiative>?" → `marky canvas ls`
   (combine `--project "<name>"`, `--tag research`, `--status doing`; `--archived` to include shelved ones)
 
 **Archive vs. delete vs. park:** `archive` only *hides* a canvas from your list and
@@ -192,24 +192,24 @@ stray comment doesn't pull Claude back onto it.
 ### Organize it yourself — don't wait to be asked
 
 **File every canvas as you publish it.** A title, a project, and a kind tag cost nothing
-and keep the human's `marky documents ls` readable. Do this on your own; only ask if you genuinely
+and keep the human's `marky canvas ls` readable. Do this on your own; only ask if you genuinely
 can't infer the project.
 
 Set it in the same `push` — no follow-up commands:
 
 ```
-marky documents push plan.md --title "Tokyo itinerary v2" --project journeys --status doing --tag plan
+marky canvas push plan.md --title "Tokyo itinerary v2" --project journeys --status doing --tag plan
 ```
 
 - **Title** — always give a real, human one (`--title`). Don't ship "Untitled canvas" or a
-  filename. Push infers from the doc's first `# heading` if you omit it; prefer setting it.
+  filename. Push infers from the canvas's first `# heading` if you omit it; prefer setting it.
 - **Project = the initiative you're working in.** Infer it from context — the repo/working
   directory (`~/Projects/journeys` → `journeys`), or the thing the human is building. One per
   canvas.
-- **Tags = what the doc is.** Read the content and label it: a plan/spec → `plan`, findings →
+- **Tags = what the canvas is.** Read the content and label it: a plan/spec → `plan`, findings →
   `research`, a QA/test write-up → `testing-report`, a design → `design`. One or two is plenty
   — don't over-tag.
-- **Status follows the work:** a doc you're parking → leave `todo`; one you're actively
+- **Status follows the work:** a canvas you're parking → leave `todo`; one you're actively
   iterating on or took `live` → `doing`; signed-off/shipped → `done`. Move it as state changes
   (e.g. set `done` right after the human approves), not just at creation.
 
@@ -219,7 +219,7 @@ marky documents push plan.md --title "Tokyo itinerary v2" --project journeys --s
 **most-recent canvases** (slug · title · status · tags · open · updated). Use it to pick the
 right project, reuse an existing tag, and decide **create vs. update** (match an existing slug
 to update; otherwise a push creates). The canvas list is capped to the latest ~15 — pass
-`--limit 0` or drill in with `marky documents ls --project <name>` when you need more.
+`--limit 0` or drill in with `marky canvas ls --project <name>` when you need more.
 
 **Reuse existing labels — don't fork them.** Match the human's existing spelling from
 `marky context` (`journeys`, not a new `journeys-im`) so groups don't splinter.
@@ -231,12 +231,12 @@ and never nag about it.
 **Tidy-up pass** — when the human asks to "organize/file my canvases", "fix up the unfiled
 ones", or "tidy up" (and `marky context` shows an *Unfiled* count):
 
-1. `marky documents ls --unfiled --json` — the work-list (canvases missing a project or tags). Each row
+1. `marky canvas ls --unfiled --json` — the work-list (canvases missing a project or tags). Each row
    carries `title` + `description`, which is usually enough to classify without opening it;
-   `marky documents pull <slug>` only if you need the body.
+   `marky canvas pull <slug>` only if you need the body.
 2. `marky context` once up front for the existing project/tag vocabulary — **reuse it**, don't
    coin near-duplicates.
-3. For each, set everything in one call: `marky documents set <slug> --project <initiative> --tag <kind>`
+3. For each, set everything in one call: `marky canvas set <slug> --project <initiative> --tag <kind>`
    (add `--status` if its state is obvious). Leave a canvas alone if you genuinely can't tell —
    don't guess a wrong project.
 
@@ -248,7 +248,7 @@ PATH, token, server — it never touches canvas data.)
 
 **Share a draft for feedback**
 1. Write the plan/draft to a file (e.g. `/tmp/plan.md`).
-2. `marky documents push /tmp/plan.md --title "Launch plan"` → give the user the URL.
+2. `marky canvas push /tmp/plan.md --title "Launch plan"` → give the user the URL.
 3. Tell them: hover any line, click to comment; mark threads done as they're addressed.
 
 **React to feedback (socket mode)**
@@ -256,7 +256,7 @@ PATH, token, server — it never touches canvas data.)
 2. When a comment arrives, restate it to the user. Either reply on the canvas
    (`marky comments reply <annId> "..."`) or answer in chat — ask the user which they want
    if unclear.
-3. When you make the requested change to the underlying file, `marky documents push <file> --slug <slug>`
+3. When you make the requested change to the underlying file, `marky canvas push <file> --slug <slug>`
    to publish the new version (history is preserved; the page live-updates), then
    `marky comments resolve <annId>`.
 
@@ -273,7 +273,7 @@ fraction `(0..1)` inside the element — on top of `anchorTag: "img"` and
 label shows a region, e.g. `<img> "dashboard" @ top-right (78%,22%)`.
 
 To know *where* a comment points — and to actually **see** it:
-1. `marky documents pull <slug>` to get the content; find the `<img>` and its `src`.
+1. `marky canvas pull <slug>` to get the content; find the `<img>` and its `src`.
 2. Read the image — Read needs a local file path, so first get the `src` onto
    disk: a `data:` URI → decode its base64 to a temp file (`.png`/`.jpg`/`.svg`
    by mime); a URL → fetch it down. Then Read it (Claude Code views images). The
@@ -311,7 +311,7 @@ Wire them with the **Monitor** tool (the harness primitive that tails dev-server
 logs): `Monitor(command: "marky comments watch <slug> --json", persistent: true)`. Each
 new comment wakes the session. On wake, run `marky comments inbox` to get the exact
 actionable set, then handle each thread: `marky comments working <annId>` → answer or
-edit-the-source-and-`marky documents push --slug <slug>` → `marky comments reply` → `marky comments resolve`.
+edit-the-source-and-`marky canvas push --slug <slug>` → `marky comments reply` → `marky comments resolve`.
 
 Idle costs nothing (the subscription sits in a shell process, zero LLM); tokens
 are spent only on real comments. Event wakes you, state decides what to do — so
