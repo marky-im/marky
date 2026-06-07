@@ -1,11 +1,34 @@
 #!/usr/bin/env bash
 # Marky launcher. While the plugin is enabled this is on the Bash tool's PATH,
-# so `marky <command>` just works — no separate `setup` step. Runs the bundled
-# Bun CLI. Requires `bun` (https://bun.sh).
+# so `marky <command>` just works — no separate `setup` step. Requires `bun`
+# (https://bun.sh).
+#
+# Self-resolving shim: rather than run *this* copy's CLI, it finds the newest
+# installed plugin version in the cache and runs that. So a plugin update is
+# picked up on the very next `marky` call without a `/reload-plugins` — Claude
+# Code pins the on-PATH launcher to its version dir, but this launcher doesn't
+# care which dir it lives in; it always execs the latest one on disk.
 set -euo pipefail
-ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+
+self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # .../<version>/bin
+base="$(cd "$self/../.." && pwd)"                       # .../marky-im/marky (holds version dirs)
+
+# Newest installed version dir (semver order). Empty if the layout isn't the
+# versioned cache (e.g. running straight from a git checkout).
+# `|| true` so a no-match grep (a dev checkout with no version dirs) doesn't trip
+# `set -e`/`pipefail` — we want to fall through to the fallback below, not abort.
+newest="$(ls -1 "$base" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
+root="$base/$newest"
+
+# Fall back to this copy's own dir if we couldn't resolve a newer one (dev
+# checkout, unexpected layout, or a half-cleaned cache) — never worse than before.
+if [ -z "$newest" ] || [ ! -f "$root/cli/canvas.ts" ]; then
+  root="$(cd "$self/.." && pwd)"
+fi
+
 if ! command -v bun >/dev/null 2>&1; then
   echo "marky: needs 'bun' on PATH — install it from https://bun.sh, then retry." >&2
   exit 127
 fi
-exec bun "$ROOT/cli/canvas.ts" "$@"
+
+exec bun "$root/cli/canvas.ts" "$@"
