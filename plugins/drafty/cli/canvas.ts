@@ -207,30 +207,11 @@ function modeLine(mode: Mode, slug: string): string {
   return "Claude works new comments as they arrive";
 }
 
-// Lightweight task state on a canvas, for the owner's own backlog. Orthogonal to
-// `archived` (a hide flag) and `mode` (sharing behaviour). Aliases map common
-// phrasings onto the canonical three.
-const STATUSES = ["todo", "doing", "done"] as const;
-type Status = (typeof STATUSES)[number];
-const statusIcon: Record<Status, string> = { todo: "○", doing: "◐", done: "✓" };
-const statusRank: Record<Status, number> = { todo: 0, doing: 1, done: 2 };
-const STATUS_ALIAS: Record<string, Status> = {
-  todo: "todo", backlog: "todo", new: "todo",
-  doing: "doing", "in-progress": "doing", in_progress: "doing", inprogress: "doing", wip: "doing", active: "doing",
-  done: "done", complete: "done", completed: "done", shipped: "done",
-};
-function parseStatus(value: string | undefined): Status {
-  if (value === undefined) die(`status must be one of: ${STATUSES.join(", ")}`);
-  const s = STATUS_ALIAS[value.toLowerCase()];
-  if (!s) die(`status must be one of: ${STATUSES.join(", ")}`);
-  return s;
-}
 // One-line summary of a canvas's organize state, from a setmeta response
-// (`▸ project   ◐ doing   #tag …`). Shared by push + organize. "" when nothing set.
-function fmtMeta(m: { project?: string | null; status?: string | null; tags?: unknown }): string {
+// (`▸ project   #tag …`). Shared by push + organize. "" when nothing set.
+function fmtMeta(m: { project?: string | null; tags?: unknown }): string {
   return [
     m.project ? `▸ ${m.project}` : null,
-    m.status ? `${statusIcon[m.status as Status] ?? "○"} ${m.status}` : null,
     Array.isArray(m.tags) && m.tags.length ? (m.tags as string[]).map((t) => `#${t}`).join(" ") : null,
   ].filter(Boolean).join("   ");
 }
@@ -394,7 +375,7 @@ async function uploadLocalAssets(content: string, file: string): Promise<string>
 // ── commands ────────────────────────────────────────────────────────────────
 async function canvasPush(args: string[]) {
   const file = args[0];
-  if (!file) return die("usage: drafty canvas push <file> [--title T] [--slug S] [--mode M] [--format html|markdown] [--project P] [--status S] [--tag T …]");
+  if (!file) return die("usage: drafty canvas push <file> [--title T] [--slug S] [--mode M] [--format html|markdown] [--project P] [--tag T …]");
   const content = await Bun.file(file).text();
   if (!content.trim()) return die(`file is empty: ${file}`);
   // --format html|markdown is an explicit override; otherwise sniff content+extension.
@@ -407,8 +388,6 @@ async function canvasPush(args: string[]) {
   const slug = flag(args, "slug");
   // Organize flags, parsed up front so a bad value fails before anything publishes.
   const project = flag(args, "project");
-  const statusFlag = flag(args, "status");
-  const status = statusFlag !== undefined ? parseStatus(statusFlag) : undefined;
   const tags = multiFlag(args, "tag");
   // Upload local images → served URLs in the published copy; the file on disk is
   // left as-is (small + editable). Titles are inferred from the original content.
@@ -425,14 +404,13 @@ async function canvasPush(args: string[]) {
   }
   console.log(`  ${url(r.slug)}`);
 
-  // Organize at publish time: any --project/--status/--tag flags are applied in a
-  // single setmeta call, so the agent files a canvas under its initiative + kind
-  // as it ships, instead of leaving it loose. Tags are additive (re-pushing keeps
-  // existing ones); status/project overwrite.
-  if (project !== undefined || status !== undefined || tags.length) {
+  // Organize at publish time: any --project/--tag flags are applied in a single
+  // setmeta call, so the agent files a canvas under its initiative + kind as it
+  // ships, instead of leaving it loose. Tags are additive (re-pushing keeps
+  // existing ones); project overwrites.
+  if (project !== undefined || tags.length) {
     const meta: Record<string, unknown> = { slug: r.slug };
     if (project !== undefined) meta.project = project;
-    if (status !== undefined) meta.status = status;
     if (tags.length) meta.addTags = tags;
     const summary = fmtMeta(await api("canvas.set", { body: meta }));
     if (summary) console.log(`  ${summary}`);
@@ -579,24 +557,23 @@ async function canvasTag(args: string[], add: boolean) {
 }
 
 // `canvas set` — the single organizer for an existing canvas, in one call and
-// without re-publishing: --project P | --no-project, --status <todo|doing|done>,
-// --tag T… (add), --untag T… (remove), --clear-tags. The primitive for filing one
-// canvas or a whole tidy-up pass (`canvas ls --unfiled`).
+// without re-publishing: --project P | --no-project, --tag T… (add), --untag T…
+// (remove), --clear-tags. The primitive for filing one canvas or a whole tidy-up
+// pass (`canvas ls --unfiled`).
 async function canvasSet(args: string[]) {
   const slug = args[0];
   if (!slug || slug.startsWith("--")) {
-    return die("usage: drafty canvas set <slug> [--project P | --no-project] [--status S] [--tag T…] [--untag T…] [--clear-tags]");
+    return die("usage: drafty canvas set <slug> [--project P | --no-project] [--tag T…] [--untag T…] [--clear-tags]");
   }
   const meta: Record<string, unknown> = { slug };
   if (has(args, "no-project")) meta.project = "";
   else { const p = flag(args, "project"); if (p !== undefined) meta.project = p; }
-  const s = flag(args, "status"); if (s !== undefined) meta.status = parseStatus(s);
   if (has(args, "clear-tags")) meta.tags = [];
   else {
     const add = multiFlag(args, "tag"); if (add.length) meta.addTags = add;
     const rm = multiFlag(args, "untag"); if (rm.length) meta.removeTags = rm;
   }
-  if (Object.keys(meta).length === 1) return die("nothing to set — pass --project/--no-project, --status, --tag, --untag, and/or --clear-tags");
+  if (Object.keys(meta).length === 1) return die("nothing to set — pass --project/--no-project, --tag, --untag, and/or --clear-tags");
   const summary = fmtMeta(await api("canvas.set", { body: meta }));
   console.log(`✓ ${slug}${summary ? " — " + summary : " — cleared"}`);
 }
@@ -733,7 +710,7 @@ async function canvasRm(args: string[]) {
 }
 
 // Print canvases grouped by project (named projects alphabetical, ungrouped
-// last), each row showing status icon · slug · title · tags · open count.
+// last), each row showing slug · title · tags · open count · when, newest first.
 // Shared by `canvases` and `context` so a canvas always renders the same way.
 function printCanvasGroups(items: any[]) {
   const groups = new Map<string, any[]>();
@@ -745,34 +722,26 @@ function printCanvasGroups(items: any[]) {
   const named = [...groups.keys()].filter(Boolean).sort();
   const order = groups.has("") ? [...named, ""] : named;
   for (const key of order) {
-    const rows = groups.get(key)!.sort(
-      (a, b) => statusRank[(a.status || "todo") as Status] - statusRank[(b.status || "todo") as Status] || (b.updatedAt || 0) - (a.updatedAt || 0),
-    );
+    const rows = groups.get(key)!.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     console.log(`\n${key || "(no project)"}`);
     for (const d of rows) {
-      const st = (d.status || "todo") as Status;
       const tags = Array.isArray(d.tags) && d.tags.length ? "  " + d.tags.map((t: string) => `#${t}`).join(" ") : "";
       const open = d.open ? ` · ${d.open} open` : "";
       const upd = d.updatedAt ? ` · ${relTime(d.updatedAt)}` : "";
       const arch = d.archived ? " · archived" : "";
-      console.log(`  ${statusIcon[st] ?? "○"} ${st.padEnd(5)} ${d.slug}  ${d.title}${tags}${open}${upd}${arch}`);
+      console.log(`  ${d.slug}  ${d.title}${tags}${open}${upd}${arch}`);
     }
   }
 }
 
-// List your canvases, grouped by project and showing task status. Archived
-// canvases are hidden unless --archived. Filter with --status <todo|doing|done>
-// and --project "<name>". --json emits the (filtered) rows for tooling.
+// List your canvases, grouped by project, newest first. Archived canvases are
+// hidden unless --archived. Filter with --project "<name>" and/or --tag.
+// --json emits the (filtered) rows for tooling.
 async function canvasLs(args: string[] = []) {
   const r = await api("canvas.ls", { method: "GET" });
   let items = r.items as any[];
 
   if (!has(args, "archived") && !has(args, "all")) items = items.filter((d) => !d.archived);
-  const statusFilter = flag(args, "status");
-  if (statusFilter) {
-    const want = parseStatus(statusFilter);
-    items = items.filter((d) => (d.status || "todo") === want);
-  }
   const projectFilter = flag(args, "project");
   if (projectFilter !== undefined) items = items.filter((d) => (d.project || "") === projectFilter);
   const tagFilter = flag(args, "tag");
@@ -788,14 +757,14 @@ async function canvasLs(args: string[] = []) {
   if (has(args, "json")) { console.log(JSON.stringify(items, null, 2)); return; }
 
   if (!items.length) {
-    console.log(unfiled ? "✓ every canvas has a project and tags — nothing to file" : statusFilter || projectFilter ? "(no canvases match that filter)" : "(no canvases yet — publish one with `drafty canvas push <file>`)");
+    console.log(unfiled ? "✓ every canvas has a project and tags — nothing to file" : projectFilter ? "(no canvases match that filter)" : "(no canvases yet — publish one with `drafty canvas push <file>`)");
     return;
   }
   printCanvasGroups(items);
 }
 
-// Show one canvas's metadata — title, link, status, project, tags, mode, thread
-// counts. Composed from your `canvas ls` data (your own canvases only).
+// Show one canvas's metadata — title, link, project, tags, mode, thread counts.
+// Composed from your `canvas ls` data (your own canvases only).
 async function canvasShow(args: string[]) {
   const slug = args[0];
   if (!slug || slug.startsWith("--")) return die("usage: drafty canvas show <slug>");
@@ -803,11 +772,10 @@ async function canvasShow(args: string[]) {
   const d = (r.items as any[]).find((x) => x.slug === slug);
   if (!d) return die(`no canvas "${slug}" under your account — try \`drafty canvas ls\``);
   if (has(args, "json")) { console.log(JSON.stringify(d, null, 2)); return; }
-  const st = (d.status || "todo") as Status;
   const tags = Array.isArray(d.tags) && d.tags.length ? "   " + d.tags.map((t: string) => `#${t}`).join(" ") : "";
   console.log(d.title);
   console.log(`  ${url(d.slug)}`);
-  console.log(`  ${statusIcon[st] ?? "○"} ${st}${d.project ? `   ▸ ${d.project}` : ""}${tags}`);
+  if (d.project || tags) console.log(`  ${d.project ? `▸ ${d.project}` : ""}${tags}`);
   console.log(`  mode: ${d.mode || "feedback"}${d.archived ? " · archived" : ""}${d.open ? ` · ${d.open} open thread(s)` : ""}`);
   if (d.description) console.log(`  ${d.description}`);
   if (d.updatedAt) console.log(`  updated ${relTime(d.updatedAt)}`);
@@ -876,7 +844,7 @@ async function context(args: string[] = []) {
       shownCanvases: shown.length, moreCanvases: more,
       canvases: shown.map((d) => ({
         slug: d.slug, title: d.title, description: d.description || null, project: d.project || null,
-        status: d.status || "todo", tags: d.tags || [], open: d.open || 0, updatedAt: d.updatedAt || 0,
+        tags: d.tags || [], open: d.open || 0, updatedAt: d.updatedAt || 0,
       })),
     }, null, 2));
     return;
@@ -1160,14 +1128,14 @@ async function changelog(args: string[]) {
 const HELP = `drafty — publish canvases for annotation, read & reply to the comments
 
 CANVAS — the canvas you publish
-  drafty canvas push <file> [--title T] [--slug S] [--mode M] [--project P] [--status S] [--tag T …]   publish/update + file it
-  drafty canvas ls [--status S] [--project P] [--tag T] [--unfiled] [--archived] [--json]   list your canvases
-  drafty canvas show <slug>                meta: title, link, status, project, tags, mode, threads
+  drafty canvas push <file> [--title T] [--slug S] [--mode M] [--project P] [--tag T …]   publish/update + file it
+  drafty canvas ls [--project P] [--tag T] [--unfiled] [--archived] [--json]   list your canvases
+  drafty canvas show <slug>                meta: title, link, project, tags, mode, threads
   drafty canvas pull <slug> [--revision id] [-o f]   download the content
   drafty canvas versions <slug> [--json]   list a canvas's versions, newest first
   drafty canvas restore <slug> <revisionId>   restore to a past version
   drafty canvas rename <slug> "<title>"
-  drafty canvas set <slug> [--project P|--no-project] [--status S] [--tag T…] [--untag T…] [--clear-tags]   organize
+  drafty canvas set <slug> [--project P|--no-project] [--tag T…] [--untag T…] [--clear-tags]   organize
   drafty canvas tag <slug> <label…> / untag <slug> <label…>   add/remove kind labels
   drafty canvas archive <slug> / unarchive <slug>   hide from / restore to \`canvas ls\`
   drafty canvas mode <slug> <readonly|feedback|live>   how it behaves when shared

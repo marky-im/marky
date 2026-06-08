@@ -130,7 +130,7 @@ the update unprompted, since it changes their environment.
 | `drafty canvas versions <slug> [--json]` | List a canvas's versions, newest first — each with its revision id, time, author, and note. Feed an id into `drafty canvas pull --revision` or `drafty canvas restore`. |
 | `drafty canvas restore <slug> <revisionId>` | Roll the canvas back to a past version (revision ids come from `drafty canvas versions` or the web History panel). |
 | `drafty context [--limit N] [--archived] [--json]` | **Orientation in one call** — identity, local git repo/branch, the projects + tags already in use (with counts), and the most-recent canvases (capped to ~15; `--limit 0` for all). Run it before a push/update to pick the project, reuse tags, and decide create-vs-update. |
-| `drafty canvas ls [--status S] [--project P] [--tag T] [--archived] [--json]` | List your canvases, **grouped by project** with each one's task status (`○ todo` / `◐ doing` / `✓ done`) and `#tags`. Archived canvases are hidden unless `--archived`. Filter with `--status <todo\|doing\|done>`, `--project "<name>"`, and/or `--tag <label>`. Aliases: `drafty canvas ls`. |
+| `drafty canvas ls [--project P] [--tag T] [--archived] [--json]` | List your canvases, **grouped by project**, newest first, with each one's `#tags` and open-thread count. Archived canvases are hidden unless `--archived`. Filter with `--project "<name>"` and/or `--tag <label>`. |
 | `drafty changelog [--json]` | What shipped on Drafty, grouped by week (public feed; no sign-in needed). Use when the human asks "what's new in drafty". |
 | `drafty login` | Sign the human in — opens their browser; one sign-in covers web + CLI, and any canvases made before signing in fold into the account. `drafty logout` signs out. |
 | `drafty canvas claim <slug>` | Take ownership of a *provisional* canvas (one minted by `/get/provision`) so it stops being ephemeral and lists under the human's account. Requires being signed in (`drafty login` first); authorize the transfer with the canvas's provision token: `DRAFTY_TOKEN=<provision token> drafty canvas claim <slug>`. Only when the human asks to keep it. |
@@ -140,9 +140,9 @@ the update unprompted, since it changes their environment.
 | Command | What it does |
 |---|---|
 | `drafty canvas rename <slug> "<new name>"` | Rename a canvas (title only; the URL/slug is stable). |
-| `drafty canvas tag <slug> <label…>` / `drafty canvas untag <slug> <label…>` | Add/remove cross-cutting labels for *what the canvas is* — `plan`, `research`, `testing-report`, … A canvas can carry several; they're normalised (lowercased, `#` stripped, spaces → `-`). `untag --all` clears them. Status + project are set via `drafty canvas set` (below). |
-| `drafty canvas set <slug> [--project P] [--status S] [--tag T…] [--untag T…]` | Set project/status/tags on an existing canvas in **one call**, without re-publishing. The efficient primitive for filing a canvas (or a whole tidy-up pass). `--no-project` clears the project. |
-| `drafty canvas archive <slug>` / `drafty canvas unarchive <slug>` | Archive = hide from `drafty canvas ls` and **park it for the loop** (Claude won't auto-work its comments). The canvas keeps its status, and its link still opens + takes comments. Reverse with `unarchive`. |
+| `drafty canvas tag <slug> <label…>` / `drafty canvas untag <slug> <label…>` | Add/remove cross-cutting labels for *what the canvas is* — `plan`, `research`, `testing-report`, … A canvas can carry several; they're normalised (lowercased, `#` stripped, spaces → `-`). `untag --all` clears them. Project is set via `drafty canvas set` (below). |
+| `drafty canvas set <slug> [--project P] [--tag T…] [--untag T…]` | Set project/tags on an existing canvas in **one call**, without re-publishing. The efficient primitive for filing a canvas (or a whole tidy-up pass). `--no-project` clears the project. |
+| `drafty canvas archive <slug>` / `drafty canvas unarchive <slug>` | Archive = hide from `drafty canvas ls` and **park it for the loop** (Claude won't auto-work its comments). Use it as the "done/shipped" signal once a canvas's work has landed — its link still opens + takes comments, and its history is kept. Reverse with `unarchive`. |
 | `drafty comments rm-reply <commentId>` | Delete one comment. |
 | `drafty comments rm <annotationId>` | Delete a thread (annotation + its comments). |
 | `drafty comments clear <slug> --yes` | Delete **all** threads on a canvas (keeps the canvas). |
@@ -153,7 +153,7 @@ Annotation ids are printed by `list`, `inbox`, and `watch` — copy them into `r
 ## Canvas modes (how Claude drives sharing)
 
 A canvas has one **mode** — the single control for how it behaves when shared.
-You set it; the watch loop and the canvas's on-screen status follow from it. The
+You set it; the watch loop and the canvas's on-screen indicator follow from it. The
 user shouldn't run `drafty` themselves — they speak, you run the command.
 
 | Mode | Viewers can comment | You (Claude) act on comments |
@@ -183,43 +183,50 @@ watch doorbell for that canvas (`Monitor` on `drafty comments watch <slug> --jso
   (check `drafty canvas ls`), so "live" survives across sessions. While you're not
   running, the canvas honestly shows "Claude offline" and comments queue.
 
-## Organizing canvases (status · project · tags · archive)
+## Organizing canvases (project · tags · archive)
 
-Beyond mode, a canvas carries four organizing axes — the owner's own backlog view,
-surfaced by `drafty canvas ls`:
+Beyond mode, a canvas carries three organizing axes — the owner's view, surfaced by
+`drafty canvas ls` and the web home at drafty.im/home:
 
-- **status** — `todo` / `doing` / `done` (where it is)
 - **project** — one label = its home initiative, e.g. `drafty` / `journeys` (where it lives)
 - **tags** — many labels = what it *is*, e.g. `plan` / `research` / `testing-report` (faceting)
-- **archived** — a hide flag (keeps status; drops from the list; parks the loop)
+- **archived** — a hide flag: shelve a finished canvas (drops from the list; parks the loop)
+
+There's **no status to set**. The home list orders by **recent Claude activity** — whatever you
+last pushed to floats to the top, and a canvas you've pushed to in the last ~20 min shows a
+**live** pulse ("Claude's on it now"). Finished work gets **archived**, not marked "done".
 
 Project is the single grouping; tags cut across projects. Drive them from natural language:
 
-- "mark X as done / in progress / todo" → `drafty canvas set <slug> --status <state>`
 - "put these under <initiative>" / "group X with the landing work" →
   `drafty canvas set <slug> --project "<name>"` (one per canvas; `--no-project` to remove)
 - "tag X as a research canvas / plan / testing report" → `drafty canvas tag <slug> <label…>`
   ("untag X" / "remove the plan tag" → `drafty canvas untag <slug> <label…>` or `--all`)
-- "archive X" / "I'm done with this, hide it" → `drafty canvas archive <slug>`
+- "archive X" / "I'm done with this, hide it" / "it shipped" → `drafty canvas archive <slug>`
 - "show me my canvases" / "what research is in <initiative>?" → `drafty canvas ls`
-  (combine `--project "<name>"`, `--tag research`, `--status doing`; `--archived` to include shelved ones)
+  (combine `--project "<name>"`, `--tag research`; `--archived` to include shelved ones)
 
-**Archive vs. delete vs. park:** `archive` only *hides* a canvas from your list and
-**parks it for the loop** — its link still opens and takes comments, and it keeps its
-status. Use `mode readonly` to stop comments, and `rm <slug> --yes` to delete for real.
-Because the watch loop skips archived canvases, archive anything you've shelved so a
-stray comment doesn't pull Claude back onto it.
+**Archive vs. delete vs. park:** `archive` only *hides* a canvas from your list and **parks it
+for the loop** — its link still opens and takes comments. Use `mode readonly` to stop comments,
+and `rm <slug> --yes` to delete for real. Because the watch loop skips archived canvases, archive
+anything you've shelved so a stray comment doesn't pull Claude back onto it.
 
-### Organize it yourself — don't wait to be asked
+**Archive on ship — don't wait to be asked.** A canvas is usually a plan/design/spec that Claude
+then builds. When that work actually ships — the PR is merged, the change is deployed — archive
+the canvas: `drafty canvas archive <slug>`. That's the "done" signal: it clears the canvas off the
+home list while keeping its link and history. Do it on your own at the ship moment (right after you
+merge/deploy), the way you'd close a tracking issue. Don't archive just because comments are
+resolved — a cleared inbox isn't a ship.
 
-**File every canvas as you publish it.** A title, a project, and a kind tag cost nothing
-and keep the human's `drafty canvas ls` readable. Do this on your own; only ask if you genuinely
-can't infer the project.
+### File it as you publish — don't wait to be asked
+
+**File every canvas as you publish it.** A title, a project, and a kind tag cost nothing and keep
+the human's list readable. Do this on your own; only ask if you genuinely can't infer the project.
 
 Set it in the same `push` — no follow-up commands:
 
 ```
-drafty canvas push plan.md --title "Tokyo itinerary v2" --project journeys --status doing --tag plan
+drafty canvas push plan.md --title "Tokyo itinerary v2" --project journeys --tag plan
 ```
 
 - **Title** — always give a real, human one (`--title`). Don't ship "Untitled canvas" or a
@@ -230,24 +237,20 @@ drafty canvas push plan.md --title "Tokyo itinerary v2" --project journeys --sta
 - **Tags = what the canvas is.** Read the content and label it: a plan/spec → `plan`, findings →
   `research`, a QA/test write-up → `testing-report`, a design → `design`. One or two is plenty
   — don't over-tag.
-- **Status follows the work:** a canvas you're parking → leave `todo`; one you're actively
-  iterating on or took `live` → `doing`; signed-off/shipped → `done`. Move it as state changes
-  (e.g. set `done` right after the human approves), not just at creation.
 
 **Orient first with `drafty context`.** Before a push/update, run `drafty context` (or
 `--json`) once — it returns, in a single call: your identity, the **local git repo + branch**
 (to infer the project), the **projects and tags already in use** (with counts), and the
-**most-recent canvases** (slug · title · status · tags · open · updated). Use it to pick the
-right project, reuse an existing tag, and decide **create vs. update** (match an existing slug
-to update; otherwise a push creates). The canvas list is capped to the latest ~15 — pass
-`--limit 0` or drill in with `drafty canvas ls --project <name>` when you need more.
+**most-recent canvases** (slug · title · tags · open · updated). Use it to pick the right project,
+reuse an existing tag, and decide **create vs. update** (match an existing slug to update;
+otherwise a push creates). The canvas list is capped to the latest ~15 — pass `--limit 0` or drill
+in with `drafty canvas ls --project <name>` when you need more.
 
 **Reuse existing labels — don't fork them.** Match the human's existing spelling from
 `drafty context` (`journeys`, not a new `journeys-im`) so groups don't splinter.
 
-**Keep it tidy over time:** when a canvas is clearly finished, mark it `done`; when it's stale
-or superseded, `archive` it. This is the human's backlog — infer sensibly, fix on correction,
-and never nag about it.
+**Keep it tidy over time:** when a canvas's work has shipped — or it's stale or superseded —
+`archive` it. This is the human's list — infer sensibly, fix on correction, and never nag about it.
 
 **Tidy-up pass** — when the human asks to "organize/file my canvases", "fix up the unfiled
 ones", or "tidy up" (and `drafty context` shows an *Unfiled* count):
@@ -257,13 +260,11 @@ ones", or "tidy up" (and `drafty context` shows an *Unfiled* count):
    `drafty canvas pull <slug>` only if you need the body.
 2. `drafty context` once up front for the existing project/tag vocabulary — **reuse it**, don't
    coin near-duplicates.
-3. For each, set everything in one call: `drafty canvas set <slug> --project <initiative> --tag <kind>`
-   (add `--status` if its state is obvious). Leave a canvas alone if you genuinely can't tell —
-   don't guess a wrong project.
+3. For each, set everything in one call: `drafty canvas set <slug> --project <initiative> --tag <kind>`.
+   Leave a canvas alone if you genuinely can't tell — don't guess a wrong project.
 
-There's nothing to "fix" for **status** — a canvas with no status already reads as `todo`, so a
-tidy-up only fills **project** and **tags**. (And note: `drafty doctor` is a *setup* health check —
-PATH, token, server — it never touches canvas data.)
+(And note: `drafty doctor` is a *setup* health check — PATH, token, server — it never touches
+canvas data.)
 
 ## Typical workflows
 
