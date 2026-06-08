@@ -726,31 +726,24 @@ async function canvasRm(args: string[]) {
 // Print canvases grouped by project (named projects alphabetical, ungrouped
 // last), each row showing slug · title · tags · open count · when, newest first.
 // Shared by `canvases` and `context` so a canvas always renders the same way.
-function printCanvasGroups(items: any[]) {
-  const groups = new Map<string, any[]>();
-  for (const d of items) {
-    const key = d.project || "";
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(d);
-  }
-  const named = [...groups.keys()].filter(Boolean).sort();
-  const order = groups.has("") ? [...named, ""] : named;
-  for (const key of order) {
-    const rows = groups.get(key)!.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-    console.log(`\n${key || "(no project)"}`);
-    for (const d of rows) {
-      const tags = Array.isArray(d.tags) && d.tags.length ? "  " + d.tags.map((t: string) => `#${t}`).join(" ") : "";
-      const open = d.open ? ` · ${d.open} open` : "";
-      const upd = d.updatedAt ? ` · ${relTime(d.updatedAt)}` : "";
-      const arch = d.archived ? " · archived" : "";
-      console.log(`  ${d.slug}  ${d.title}${tags}${open}${upd}${arch}`);
-    }
+// One flat list, newest first — the same order as the web home (Recents) and
+// `drafty context`, so the three surfaces never disagree on ordering. Project is
+// shown inline per row (no grouping) so a single recency scan stays intact.
+function printCanvasList(items: any[]) {
+  const rows = [...items].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  for (const d of rows) {
+    const tags = Array.isArray(d.tags) && d.tags.length ? "  " + d.tags.map((t: string) => `#${t}`).join(" ") : "";
+    const proj = d.project ? ` · ${d.project}` : "";
+    const open = d.open ? ` · ${d.open} open` : "";
+    const upd = d.updatedAt ? ` · ${relTime(d.updatedAt)}` : "";
+    const arch = d.archived ? " · archived" : "";
+    console.log(`  ${d.slug}  ${d.title}${tags}${proj}${open}${upd}${arch}`);
   }
 }
 
-// List your canvases, grouped by project, newest first. Archived canvases are
-// hidden unless --archived. Filter with --project "<name>" and/or --tag.
-// --json emits the (filtered) rows for tooling.
+// List your canvases, newest first (flat — same order as the web home and
+// `drafty context`). Archived canvases are hidden unless --archived. Filter with
+// --project "<name>", --tag, or --unfiled. --json emits the (filtered) rows.
 async function canvasLs(args: string[] = []) {
   const r = await api("canvas.ls", { method: "GET" });
   let items = r.items as any[];
@@ -774,7 +767,8 @@ async function canvasLs(args: string[] = []) {
     console.log(unfiled ? "✓ every canvas has a project and tags — nothing to file" : projectFilter ? "(no canvases match that filter)" : "(no canvases yet — publish one with `drafty canvas push <file>`)");
     return;
   }
-  printCanvasGroups(items);
+  printCanvasList(items);
+  console.log(`\nNewest first. To update a canvas, push its exact slug; a push without it creates a new one.`);
 }
 
 // Show one canvas's metadata — title, link, project, tags, mode, thread counts.
@@ -874,7 +868,7 @@ async function context(args: string[] = []) {
 
   if (!items.length) { console.log(`\n(no canvases yet — publish one with \`drafty canvas push <file>\`)`); return; }
   console.log(`\nMost recent${more > 0 ? ` ${shown.length} of ${items.length}` : ""}:`);
-  printCanvasGroups(shown);
+  printCanvasList(shown);
   if (more > 0) console.log(`\n  …+${more} more — \`drafty canvas ls\` for the full list, or \`drafty canvas ls --project <name>\` to drill in`);
   console.log(`\nReuse a project/tag above before inventing a new one. To update a canvas, push its exact slug; otherwise a push creates a new one.`);
 }
