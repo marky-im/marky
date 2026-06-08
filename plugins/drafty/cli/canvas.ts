@@ -49,6 +49,12 @@ function analyticsId(): string {
 async function track(eventName: string, props: Record<string, unknown> = {}): Promise<void> {
   if (process.env.DRAFTY_NO_ANALYTICS) return;
   try {
+    // Tie CLI activity to the signed-in account (same id the web uses) so a real
+    // user's web + CLI events stitch into one funnel; fall back to the per-install
+    // id only when signed out. `surface` + `cli_version` let funnel queries split
+    // web vs cli and tell who's on the latest plugin.
+    const idn = readIdentity();
+    const userId = idn?.signedIn && idn.userId ? idn.userId : analyticsId();
     await fetch(`${BASE_URL}/api/track`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -59,10 +65,16 @@ async function track(eventName: string, props: Record<string, unknown> = {}): Pr
             event_id: crypto.randomUUID(),
             ts: new Date().toISOString(),
             event_name: eventName,
-            user_id: analyticsId(),
-            anonymous_id: null,
+            user_id: userId,
+            anonymous_id: idn?.signedIn ? analyticsId() : null,
             session_id: null,
-            properties: JSON.stringify({ ...props, source: "drafty-cli" }),
+            properties: JSON.stringify({
+              ...props,
+              source: "drafty-cli",
+              surface: "cli",
+              cli_version: installedVersion(),
+              authed: !!idn?.signedIn,
+            }),
           },
         }],
       }),
