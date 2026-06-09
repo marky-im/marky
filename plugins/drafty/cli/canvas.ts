@@ -588,6 +588,17 @@ async function canvasArchive(args: string[], archived: boolean) {
   else console.log(`✓ unarchived ${slug} — back in \`drafty canvas ls\``);
 }
 
+// Pin/unpin: a stick flag. Pinned canvases hold the "Pinned" lane on drafty.im/home
+// (between Live and Recent) so a long-lived canvas never sinks into Recent as newer
+// ones publish. Orthogonal to status/archive — it only affects list position.
+async function canvasPin(args: string[], pinned: boolean) {
+  const slug = args[0];
+  if (!slug || slug.startsWith("--")) return die(`usage: drafty canvas ${pinned ? "pin" : "unpin"} <slug>`);
+  await api("canvas.set", { body: { slug, pinned } });
+  if (pinned) console.log(`✓ pinned ${slug} — held in the Pinned lane on your home, above Recent`);
+  else console.log(`✓ unpinned ${slug} — back in Recent`);
+}
+
 // Cross-cutting labels for what a canvas *is* (plan, research, testing-report…).
 // `tag` adds, `untag` removes (or --all clears). The server normalises + dedupes
 // and returns the resulting set, which we echo back.
@@ -1182,6 +1193,7 @@ CANVAS — the canvas you publish
   drafty canvas set <slug> [--project P|--no-project] [--tag T…] [--untag T…] [--clear-tags]   organize
   drafty canvas tag <slug> <label…> / untag <slug> <label…>   add/remove kind labels
   drafty canvas archive <slug> / unarchive <slug>   hide from / restore to \`canvas ls\`
+  drafty canvas pin <slug> / unpin <slug>   hold in / release from the Pinned lane on your home
   drafty canvas mode <slug> <readonly|feedback|live>   how it behaves when shared
   drafty canvas visibility <slug> <public|authed|invite|private>   who can view it (invite/private = owner + invited only)
   drafty canvas rm <slug> --yes            remove a canvas entirely
@@ -1217,6 +1229,7 @@ const CANVAS: Record<string, Cmd> = {
   versions: canvasVersions, restore: canvasRestore, rename: canvasRename,
   set: canvasSet, tag: (a) => canvasTag(a, true), untag: (a) => canvasTag(a, false),
   archive: (a) => canvasArchive(a, true), unarchive: (a) => canvasArchive(a, false),
+  pin: (a) => canvasPin(a, true), unpin: (a) => canvasPin(a, false),
   mode: canvasMode, visibility: canvasVisibility, rm: canvasRm, claim: canvasClaim,
 };
 const COMMENTS: Record<string, Cmd> = {
