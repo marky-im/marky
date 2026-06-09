@@ -118,8 +118,9 @@ the update unprompted, since it changes their environment.
 
 | Command | What it does |
 |---|---|
-| `drafty canvas push <file> [--title T] [--slug S] [--mode M]` | Publish a `.md`/`.html` file → prints the URL. Re-push with `--slug` to update + snapshot a revision. New canvases default to `feedback` mode. |
+| `drafty canvas push <file> [--title T] [--slug S] [--mode M] [--visibility V] [--private]` | Publish a `.md`/`.html` file → prints the URL. Re-push with `--slug` to update + snapshot a revision. New canvases default to `feedback` mode and `public` visibility. |
 | `drafty canvas mode <slug> <readonly\|feedback\|live>` | Set how the canvas behaves when shared (see **Canvas modes** below). |
+| `drafty canvas visibility <slug> <public\|authed\|invite\|private>` | Set **who can view** it (orthogonal to mode, which is who can *comment*). `public` = anyone with the link (default); `authed` = any signed-in account; `invite`/`private` = the owner + invited emails only — server-enforced, so a private canvas's content is **not** served to anyone else. Use `--private` on `push` to publish straight to owner-only. |
 | `drafty comments ls <slug> [--json] [--open]` | Snapshot every thread + comment (your reading view). `--open` hides resolved. |
 | `drafty comments watch <slug> [--json] [--backlog]` | **Socket mode** — stream new human comments live to stdout. Run in background; surface comments to the user as they arrive. |
 | `drafty comments inbox [slug] [--json] [--all]` | **Fresh threads that need Claude** — open, not already being worked on, latest comment from a human. Loop-safe (resolved/answered threads never reappear). A no-slug sweep only surfaces canvases set to `live`; pass a `slug` or `--all` to include `feedback` canvases too. |

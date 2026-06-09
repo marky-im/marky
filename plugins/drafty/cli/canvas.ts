@@ -219,6 +219,29 @@ function modeLine(mode: Mode, slug: string): string {
   return "Claude works new comments as they arrive";
 }
 
+// Visibility = WHO can view, orthogonal to mode (who can comment). 'public' =
+// anyone with the link (default); 'authed' = any signed-in account; 'invite' =
+// only the owner + emails on the canvas's invite list. With no invites added,
+// 'invite' means owner-only — i.e. private. Enforced server-side by the `view`
+// perm; `--private` is sugar for `--visibility invite`.
+const VISIBILITIES = ["public", "authed", "invite"] as const;
+type Visibility = (typeof VISIBILITIES)[number];
+const visibilityLabel: Record<Visibility, string> = {
+  public: "anyone with the link",
+  authed: "any signed-in account",
+  invite: "you + invited emails only (private)",
+};
+// Resolve --visibility / --private into a visibility value (or undefined = leave as-is).
+function parseVisibility(args: string[]): Visibility | undefined {
+  const raw = flag(args, "visibility");
+  const priv = has(args, "private");
+  if (priv && raw && raw !== "invite") die(`--private conflicts with --visibility ${raw}`);
+  if (priv) return "invite";
+  if (raw === undefined) return undefined;
+  if (!(VISIBILITIES as readonly string[]).includes(raw)) die(`--visibility must be one of: ${VISIBILITIES.join(", ")}`);
+  return raw as Visibility;
+}
+
 // One-line summary of a canvas's organize state, from a setmeta response
 // (`▸ project   #tag …`). Shared by push + organize. "" when nothing set.
 function fmtMeta(m: { project?: string | null; tags?: unknown }): string {
@@ -397,6 +420,7 @@ async function canvasPush(args: string[]) {
   const format = (formatFlag as "html" | "markdown" | undefined) ?? inferFormat(file, content);
   const title = flag(args, "title") || inferTitle(content, format, file);
   const mode = parseMode(flag(args, "mode"));
+  const visibility = parseVisibility(args);
   const slug = flag(args, "slug");
   // Organize flags, parsed up front so a bad value fails before anything publishes.
   const project = flag(args, "project");
@@ -406,7 +430,7 @@ async function canvasPush(args: string[]) {
   const published = await uploadLocalAssets(content, file);
   // targetSlug = update intent (exact); newSlug = pre-hashed slug if we create.
   const r = await api("canvas.push", {
-    body: { content: published, format, title, targetSlug: slug, newSlug: slugify(slug || title), ...(mode ? { mode } : {}) },
+    body: { content: published, format, title, targetSlug: slug, newSlug: slugify(slug || title), ...(mode ? { mode } : {}), ...(visibility ? { visibility } : {}) },
   });
   if (r.created) {
     console.log(`✓ published "${r.title}"  ·  ${modeLabel[r.mode as Mode]}`);
@@ -414,6 +438,7 @@ async function canvasPush(args: string[]) {
     console.log(`✓ updated "${r.title}"`);
     if (mode) console.log(`  ${modeLine(mode, r.slug)}`);
   }
+  if (visibility) console.log(`  visibility: ${visibilityLabel[visibility]}`);
   // ?ref=cli attributes views of a freshly-published link back to the CLI publish
   // (the start of the creator→commenter→creator loop).
   console.log(`  ${url(r.slug)}?ref=cli`);
@@ -540,6 +565,17 @@ async function canvasMode(args: string[]) {
   await api("canvas.mode", { body: { slug, mode } });
   console.log(`✓ ${slug} is ${modeLabel[mode]}`);
   console.log(`  ${modeLine(mode, slug)}`);
+}
+
+// Change who can view an existing canvas. `private` is sugar for `invite`.
+async function canvasVisibility(args: string[]) {
+  const slug = args[0];
+  const raw = args[1] === "private" ? "invite" : args[1];
+  if (!slug || !raw) return die(`usage: drafty canvas visibility <slug> <${VISIBILITIES.join("|")}|private>`);
+  if (!(VISIBILITIES as readonly string[]).includes(raw)) die(`visibility must be one of: ${VISIBILITIES.join(", ")} (or private)`);
+  const vis = raw as Visibility;
+  await api("canvas.visibility", { body: { slug, visibility: vis } });
+  console.log(`✓ ${slug} — ${visibilityLabel[vis]}`);
 }
 
 // Archive/unarchive: a hide flag. Archived canvases keep their status but drop
@@ -784,7 +820,7 @@ async function canvasShow(args: string[]) {
   console.log(d.title);
   console.log(`  ${url(d.slug)}`);
   if (d.project || tags) console.log(`  ${d.project ? `▸ ${d.project}` : ""}${tags}`);
-  console.log(`  mode: ${d.mode || "feedback"}${d.archived ? " · archived" : ""}${d.open ? ` · ${d.open} open thread(s)` : ""}`);
+  console.log(`  mode: ${d.mode || "feedback"}  ·  visibility: ${d.visibility || "public"}${d.archived ? " · archived" : ""}${d.open ? ` · ${d.open} open thread(s)` : ""}`);
   if (d.description) console.log(`  ${d.description}`);
   if (d.updatedAt) console.log(`  updated ${relTime(d.updatedAt)}`);
 }
@@ -1136,7 +1172,7 @@ async function changelog(args: string[]) {
 const HELP = `drafty — publish canvases for annotation, read & reply to the comments
 
 CANVAS — the canvas you publish
-  drafty canvas push <file> [--title T] [--slug S] [--mode M] [--project P] [--tag T …]   publish/update + file it
+  drafty canvas push <file> [--title T] [--slug S] [--mode M] [--visibility public|authed|invite] [--private] [--project P] [--tag T …]   publish/update + file it
   drafty canvas ls [--project P] [--tag T] [--unfiled] [--archived] [--json]   list your canvases
   drafty canvas show <slug>                meta: title, link, project, tags, mode, threads
   drafty canvas pull <slug> [--revision id] [-o f]   download the content
@@ -1147,6 +1183,7 @@ CANVAS — the canvas you publish
   drafty canvas tag <slug> <label…> / untag <slug> <label…>   add/remove kind labels
   drafty canvas archive <slug> / unarchive <slug>   hide from / restore to \`canvas ls\`
   drafty canvas mode <slug> <readonly|feedback|live>   how it behaves when shared
+  drafty canvas visibility <slug> <public|authed|invite|private>   who can view it (invite/private = owner + invited only)
   drafty canvas rm <slug> --yes            remove a canvas entirely
   drafty canvas claim <slug>               keep a provisional canvas (DRAFTY_TOKEN=<provision token>)
 
@@ -1180,7 +1217,7 @@ const CANVAS: Record<string, Cmd> = {
   versions: canvasVersions, restore: canvasRestore, rename: canvasRename,
   set: canvasSet, tag: (a) => canvasTag(a, true), untag: (a) => canvasTag(a, false),
   archive: (a) => canvasArchive(a, true), unarchive: (a) => canvasArchive(a, false),
-  mode: canvasMode, rm: canvasRm, claim: canvasClaim,
+  mode: canvasMode, visibility: canvasVisibility, rm: canvasRm, claim: canvasClaim,
 };
 const COMMENTS: Record<string, Cmd> = {
   ls: commentsLs, inbox: commentsInbox, watch: commentsWatch, reply: commentsReply, working: commentsWorking,
