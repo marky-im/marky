@@ -458,7 +458,16 @@ async function canvasPush(args: string[]) {
   if (r.created && r.mode === "feedback") {
     console.log(`  Claude waits for your go — run \`drafty canvas mode ${r.slug} live\` to work comments live`);
   }
-  await track("canvas.published", { slug: r.slug, created: !!r.created, format, mode: r.mode });
+  // First canvas ever → the server seeded a starter thread. Walk them through
+  // the one rep that is the product: see the comment, have Claude answer it.
+  if (r.welcomeSeeded) {
+    console.log("");
+    console.log("  ✦ your first canvas — a starter comment is waiting on it.");
+    console.log("    1. open the link above and find the pinned comment");
+    console.log("    2. back here, say: address the canvas comments");
+    console.log("    3. watch the reply land on the page — that round-trip is the product");
+  }
+  await track("canvas.published", { slug: r.slug, created: !!r.created, format, mode: r.mode, ...(r.welcomeSeeded ? { welcome_seeded: true } : {}) });
 }
 
 async function commentsLs(args: string[]) {
