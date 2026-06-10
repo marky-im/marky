@@ -74,6 +74,14 @@ HTML canvases are plain self-contained files: inline `<style>`, no build step, n
 external JS needed. Element anchoring works the same — `prepareDoc` bakes the
 comment anchors in, so write normal semantic HTML and don't hand-add anything.
 
+**Dark mode is handled for you.** If your HTML never declares a color scheme — no
+`color-scheme`, no `prefers-color-scheme` media query, no `light-dark()` — the
+platform auto-darkens it for dark-mode viewers (a guarded color inversion that
+preserves images and leaves hardcoded-dark designs alone). So a plain light
+design just works. Declare any of the three to take full control of your own
+dark palette — that's also the opt-out if a specific canvas must always render
+exactly as authored (e.g. `<meta name="color-scheme" content="light">`).
+
 ## Setup
 
 Installed via the **Drafty plugin** — the `drafty` command is already on PATH in
