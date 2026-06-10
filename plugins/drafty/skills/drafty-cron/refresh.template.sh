@@ -27,6 +27,14 @@ fi
 
 # --refresh marks the canvas as self-refreshing (free plan includes one; a
 # second needs Drafty Pro — the push prints the upgrade link if it's gated).
-bun "$DRAFTY" canvas push "$OUT" --private --refresh --slug "$SLUG" >/dev/null 2>&1
-echo "$new" > .last-hash
+# Only record the hash when the push actually lands. A refused push (someone's
+# editing the canvas, a plan gate, a network blip) must retry next tick — if the
+# hash is written anyway, the canvas silently stays stale until the data changes
+# a SECOND time.
+if out=$(bun "$DRAFTY" canvas push "$OUT" --private --refresh --slug "$SLUG" 2>&1); then
+  echo "$new" > .last-hash
+  echo "$(date '+%F %T') — pushed"
+else
+  echo "$(date '+%F %T') — PUSH FAILED, retrying next run — ${out##*$'\n'}"
+fi
 echo "$(date '+%F %T') — data changed, pushed"

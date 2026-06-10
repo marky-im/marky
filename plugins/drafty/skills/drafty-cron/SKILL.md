@@ -45,6 +45,20 @@ CRON=~/.drafty/cron.sh   # or run the bundled copy directly
 
 Local crons are free per run, so aggressive cadences (every 5 min = `300`) are fine. The only real costs are (a) data-source query bytes — keep queries cheap/capped — and (b) version history, which the push-only-if-changed guard already protects. Match the interval to how fast the data actually moves; 5–15 min suits most dashboards.
 
+## Gotchas learned in the field
+
+- **Never swallow the push's exit code, and only write the `.last-hash` sidecar
+  on success.** A push can be *refused* — the owner is editing the canvas on
+  drafty.im (the edit lease holds pushes off), a plan gate fires, the network
+  blips. If the script records the hash anyway, the canvas silently stays stale
+  until the data changes a second time. The template handles this; keep it.
+- **One job may refresh several canvases.** It's fine (and cheaper) to render +
+  push multiple canvases from one script on one timer — but then the launchd
+  job name no longer says what it covers. When asked "is canvas X on a cron?",
+  read the refresh *script* the job points at, not just `"$CRON" ls`. Prefer a
+  job name describing the script's scope (`…cron.analytics`), not its first
+  canvas.
+
 ## Honesty / caveats
 
 - **Local only.** launchd jobs run while the Mac is awake (they survive reboot/logout, not power-off; on sleep, missed runs coalesce to one run on wake). For always-on (laptop-closed) refresh you'd need a cloud runner — out of scope here.
