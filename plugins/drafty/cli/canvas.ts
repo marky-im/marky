@@ -1142,8 +1142,14 @@ async function doctor() {
     fail("state dir writable", STATE_DIR);
   }
 
-  // user-level (global) or any project-level .claude/ in an ancestor of cwd
-  let skillAt = existsSync(SKILL_DST) ? SKILL_DST : null;
+  // The skill ships INSIDE the plugin (…/skills/drafty/SKILL.md next to cli/),
+  // which Claude Code loads directly — no `drafty setup` registration needed.
+  // The setup-registered copies (user-level ~/.claude/skills or a project
+  // .claude/) are legacy paths from the pre-plugin era; still honored.
+  let skillAt: string | null = null;
+  const bundled = join(import.meta.dir, "..", "skills", "drafty", "SKILL.md");
+  if (existsSync(bundled)) skillAt = bundled;
+  if (!skillAt && existsSync(SKILL_DST)) skillAt = SKILL_DST;
   for (let dir = process.cwd(); !skillAt; ) {
     const p = join(dir, ".claude", "skills", "drafty", "SKILL.md");
     if (existsSync(p)) { skillAt = p; break; }
@@ -1151,7 +1157,9 @@ async function doctor() {
     if (parent === dir) break;
     dir = parent;
   }
-  skillAt ? pass("skill installed", skillAt) : fail("skill not installed", "run `drafty setup` to register it for Claude Code");
+  skillAt
+    ? pass(skillAt === bundled ? "skill bundled with the plugin" : "skill installed", skillAt)
+    : fail("skill not installed", "run `drafty setup` to register it for Claude Code");
 
   const launcher = Bun.which("drafty");
   launcher ? pass("drafty on PATH", launcher) : fail("drafty not on PATH", "run `drafty setup`");
