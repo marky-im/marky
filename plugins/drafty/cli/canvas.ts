@@ -728,27 +728,59 @@ function findChrome(): string | null {
 // ?freeze=1 behavior).
 const FREEZE_CSS = "<style>*{animation-delay:-10000s!important;animation-play-state:paused!important;transition:none!important}</style>";
 
+// Headless Chrome on macOS clamps windows to a ~500px minimum WIDTH — a bare
+// `--window-size=390,…` lays the page out at 500 CSS px and crops the shot,
+// which silently lies about phone rendering (text wraps differently, overlap
+// bugs vanish). For sub-500 widths, render the target inside an IFRAME of the
+// exact width: the iframe gets a true narrow layout viewport. The image stays
+// window-wide; the area right of the artifact is hatched so it can't be
+// mistaken for content.
+const CHROME_MIN_W = 500;
+
 async function localShot(target: string, opts: { width: number; height: number; out: string }): Promise<void> {
   const chrome = findChrome();
   if (!chrome) die("no Chrome/Chromium found for local rendering — set DRAFTY_CHROME to a browser binary");
+  const tmps: string[] = [];
   let src = target;
-  let tmp: string | null = null;
   if (existsSync(target)) {
     let html = readFileSync(resolve(target), "utf8");
     html = html.includes("</head>") ? html.replace("</head>", FREEZE_CSS + "</head>") : FREEZE_CSS + html;
-    tmp = join(tmpdir(), `drafty-shot-src-${process.pid}-${Math.random().toString(36).slice(2, 8)}.html`);
+    const tmp = join(tmpdir(), `drafty-shot-src-${process.pid}-${Math.random().toString(36).slice(2, 8)}.html`);
     writeFileSync(tmp, html);
+    tmps.push(tmp);
     src = "file://" + tmp;
+  }
+  const narrow = opts.width < CHROME_MIN_W;
+  if (narrow) {
+    if (!src.startsWith("file://"))
+      console.error(`  note: most sites refuse iframing — if the shot comes back blank, use --width ${CHROME_MIN_W}+ for URL targets`);
+    const harness =
+      `<!doctype html><html><head><style>` +
+      `body{margin:0;background:repeating-linear-gradient(45deg,#ececec 0 8px,#dcdcdc 8px 16px)}` +
+      `iframe{display:block;width:${opts.width}px;height:${opts.height}px;border:0;background:#fff}` +
+      `</style></head><body><iframe src="${src.replace(/"/g, "&quot;")}"></iframe></body></html>`;
+    const h = join(tmpdir(), `drafty-shot-harness-${process.pid}-${Math.random().toString(36).slice(2, 8)}.html`);
+    writeFileSync(h, harness);
+    tmps.push(h);
+    src = "file://" + h;
+    console.error(`  note: artifact is the left ${opts.width}px of the image (hatched area is outside the viewport)`);
   }
   // A throwaway profile dir: without it the spawn can block on the running
   // Chrome's profile lock (it tries to join the existing instance) instead of
   // rendering headlessly.
   const profile = join(tmpdir(), `drafty-shot-profile-${process.pid}`);
   const proc = Bun.spawnSync(
-    [chrome, "--headless=new", "--hide-scrollbars", "--no-first-run", "--disable-extensions", `--user-data-dir=${profile}`, `--window-size=${opts.width},${opts.height}`, `--screenshot=${opts.out}`, src],
+    [
+      chrome, "--headless=new", "--hide-scrollbars", "--no-first-run", "--disable-extensions",
+      // lets the file:// harness iframe load its file:// target
+      ...(narrow ? ["--allow-file-access-from-files"] : []),
+      `--user-data-dir=${profile}`,
+      `--window-size=${Math.max(opts.width, CHROME_MIN_W)},${opts.height}`,
+      `--screenshot=${opts.out}`, src,
+    ],
     { stdout: "pipe", stderr: "pipe" },
   );
-  if (tmp) rmSync(tmp, { force: true });
+  for (const t of tmps) rmSync(t, { force: true });
   rmSync(profile, { recursive: true, force: true });
   if (!existsSync(opts.out)) die(`chrome render failed: ${new TextDecoder().decode(proc.stderr).slice(-400)}`);
 }
