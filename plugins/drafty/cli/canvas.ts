@@ -1224,7 +1224,7 @@ async function present(args: string[]) {
   const slugFlag = flag(args, "slug");
   const refresh = has(args, "refresh");
   const dry = has(args, "dry-run");
-  const cap = Math.max(1, Math.min(20, Number(flag(args, "screens") ?? 8)));
+  const cap = Math.max(1, Math.min(40, Number(flag(args, "screens") ?? 20)));
   let widths = (flag(args, "widths") ?? "1280,390").split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0);
   if (!widths.length) widths = [1280, 390];
 
