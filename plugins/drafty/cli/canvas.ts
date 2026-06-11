@@ -1632,6 +1632,46 @@ async function canvasRename(args: string[]) {
   console.log(`✓ renamed to "${title}"`);
 }
 
+// ── shortlinks ───────────────────────────────────────────────────────────────
+// drafty.im/l/<code> redirect links with utm/ref attribution stored behind the
+// code — one short link instead of a hand-built query string. Targets are a
+// canvas slug or a same-origin /path; the server refuses external URLs.
+async function linkCreate(args: string[]) {
+  const target = args[0];
+  if (!target || target.startsWith("--"))
+    return die("usage: drafty link create <slug|/path> [--code C] [--source S] [--medium M] [--campaign C] [--content C] [--ref R]");
+  const body: Record<string, unknown> = target.startsWith("/") ? { path: target } : { slug: target };
+  for (const k of ["code", "source", "medium", "campaign", "content", "ref"]) {
+    const v = flag(args, k);
+    if (v) body[k] = v;
+  }
+  const r = await api("link.create", { body });
+  await track("cli.link.created", { code: r.code, reused: !!r.reused });
+  console.log(r.url + (r.reused ? "   (existing link reused)" : ""));
+}
+
+async function linkLs(args: string[]) {
+  const r = await api("link.ls", { method: "GET" });
+  const links = (r.links ?? []) as Record<string, unknown>[];
+  if (has(args, "json")) return console.log(JSON.stringify(links, null, 2));
+  if (!links.length) return console.log("no shortlinks yet — drafty link create <slug>");
+  for (const l of links) {
+    const target = l.slug ? `/canvas/${l.slug}` : String(l.path ?? "");
+    const utm = ["source", "medium", "campaign", "content"]
+      .map((k) => (l[k] ? `${k}=${l[k]}` : null))
+      .filter(Boolean)
+      .join(" ");
+    console.log(`${l.url}  →  ${target}${utm ? `   [${utm}]` : ""}${l.disabled ? "   (disabled)" : ""}`);
+  }
+}
+
+async function linkRm(args: string[]) {
+  const code = args[0];
+  if (!code || code.startsWith("--")) return die("usage: drafty link rm <code>");
+  await api("link.rm", { body: { code } });
+  console.log(`✓ removed /l/${code}`);
+}
+
 async function commentsRmReply(args: string[]) {
   const commentId = args[0];
   if (!commentId) return die("usage: drafty comments rm-reply <commentId>");
@@ -2229,6 +2269,11 @@ COMMENTS — threads pinned to a canvas, and their replies
   drafty comments rm-reply <commentId>        delete a single reply
   drafty comments clear <slug> --yes          delete all threads on a canvas
 
+LINKS — short tracked links (drafty.im/l/<code>) with attribution baked in
+  drafty link create <slug|/path> [--code C] [--source S] [--medium M] [--campaign C] [--content C]   mint (or reuse) a shortlink
+  drafty link ls [--json]                     your shortlinks, newest first
+  drafty link rm <code>                       remove a shortlink
+
   drafty shot <slug|file.html|url> [--width N] [--revision R] [--annotation A] [--full] [-o out]   render to an image and print its path (the agent's eyes)
   drafty present <url> [--screens N] [--widths 1280,390] [--urls a,b…] [--slug S] [--refresh] [--dry-run]   site board: map → curate → shoot → annotatable canvas
   drafty context [--limit N] [--archived] [--json]   one-shot orientation: identity, git, projects, tags + recent canvases
@@ -2260,6 +2305,7 @@ const COMMENTS: Record<string, Cmd> = {
   rm: commentsRm, "rm-reply": commentsRmReply, clear: commentsClear,
 };
 const MARKS: Record<string, Cmd> = { ls: marksLs, rm: marksRm };
+const LINK: Record<string, Cmd> = { create: linkCreate, ls: linkLs, rm: linkRm };
 // Top-level: session / meta — not scoped to a canvas or a comment.
 const TOP: Record<string, Cmd> = { context, changelog, login, logout, whoami, setup, doctor, shot, sweep, present };
 
@@ -2281,6 +2327,7 @@ async function main() {
   if (["canvas", "canvases", "documents", "document", "doc"].includes(head)) return runGroup("canvas", CANVAS, rest);
   if (head === "comments" || head === "comment") return runGroup("comments", COMMENTS, rest);
   if (head === "marks" || head === "mark") return runGroup("marks", MARKS, rest);
+  if (head === "link" || head === "links") return runGroup("link", LINK, rest);
   if (head && TOP[head]) return TOP[head](rest);
   console.log(HELP);
   if (head && !["help", "--help", "-h"].includes(head)) process.exit(1);
