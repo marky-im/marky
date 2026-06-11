@@ -996,8 +996,8 @@ async function shot(args: string[]) {
 // the same screens as a tick).
 
 const PRESENT_UA = "Mozilla/5.0 (compatible; drafty-present; +https://drafty.im)";
-// Paths that are never "main screens": auth/account/commerce plumbing and API-ish.
-const PRESENT_SKIP_PATH = /(^|\/)(login|log-in|signin|sign-in|signup|sign-up|register|logout|account|admin|cart|checkout|api|cdn-cgi|wp-admin|wp-json)(\/|$)/i;
+// Paths that are never "main screens": auth/account/commerce plumbing, API-ish, legal boilerplate.
+const PRESENT_SKIP_PATH = /(^|\/)(login|log-in|signin|sign-in|signup|sign-up|register|logout|account|admin|cart|checkout|api|cdn-cgi|wp-admin|wp-json|legal|terms|privacy)(\/|$)/i;
 // Asset/document extensions — not pages.
 const PRESENT_SKIP_EXT = /\.(png|jpe?g|gif|svg|webp|avif|ico|pdf|zip|gz|xml|rss|atom|json|css|js|mjs|map|txt|mp4|webm|mp3|woff2?)$/i;
 const PRESENT_SKIP_PAGINATION = /\/page\/\d+(\/|$)/i;
@@ -1233,8 +1233,9 @@ async function present(args: string[]) {
 
   // Refresh / re-run against an existing board: read the screen list back from
   // the board's own meta block, so the run is byte-deterministic with the
-  // original (same URLs, same widths) — no re-discovery drift.
-  if (slugFlag) {
+  // original (same URLs, same widths) — no re-discovery drift. An explicit
+  // --urls beats the meta: that's how a board's screens get re-curated.
+  if (slugFlag && !multiFlag(args, "urls").length) {
     try {
       const pulled = await api("canvas.pull", { method: "GET", query: { slug: slugFlag } });
       const m = String(pulled.content).match(/<script type="application\/json" id="drafty-present-meta">([\s\S]*?)<\/script>/);
