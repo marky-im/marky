@@ -106,14 +106,13 @@ Claude drives these; the reference is here so you can audit what it's doing.
 This runs on your machine, so the trust story is short and auditable — the whole CLI is one file, [`plugins/drafty/cli/canvas.ts`](plugins/drafty/cli/canvas.ts):
 
 - **No keys, no secrets.** Nothing ships in the plugin. `drafty login` opens your browser; a one-shot listener on `127.0.0.1` (origin-checked) receives the session token, stored at `~/.drafty/token` with `0600` perms. Without a login, commands refuse and say so — nothing publishes anonymously.
-- **It talks to drafty.im and nothing else** (override with `DRAFTY_BASE_URL`), plus one cached-daily GET to this repo's `plugin.json` on GitHub for the update nudge.
+- **It talks to drafty.im and nothing else**, plus one cached-daily GET to this repo's `plugin.json` on GitHub for the update nudge.
 - **Private stays local.** `shot` renders local files and private canvases with your own headless Chrome — private content never transits the server's render pipeline or public storage. `present` captures are shot locally too, so boards of localhost/staging work.
 - **Permissions are server-side.** The client sends intent; ownership, visibility, and the edit-clobber guard are enforced by the server. Editing the CLI doesn't get anyone more access.
 - **Telemetry:** basic usage events (e.g. `canvas.published`) go to drafty.im so I can see what's used. `DRAFTY_NO_ANALYTICS=1` turns it off.
 
 | Env var | Effect |
 |---|---|
-| `DRAFTY_BASE_URL` | Point at another server (default `https://drafty.im`) |
 | `DRAFTY_NO_ANALYTICS=1` | No usage events |
 | `DRAFTY_NO_UPDATE_CHECK=1` | No update nudge |
 | `DRAFTY_CHROME` | Path to the browser binary for local rendering |
