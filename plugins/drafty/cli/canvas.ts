@@ -6,7 +6,7 @@
 // stored under ~/.drafty) and drives everything through the public /get/api
 // endpoints. No InstantDB dependency, no native deps — installs anywhere.
 import { basename, dirname, join, resolve } from "node:path";
-import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, chmodSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, chmodSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 
 const BASE_URL = process.env.DRAFTY_BASE_URL || "https://drafty.im";
@@ -742,7 +742,7 @@ type CdpPending = { resolve: (v: any) => void; reject: (e: Error) => void };
 class CdpBrowser {
   private nextId = 1;
   private pending = new Map<number, CdpPending>();
-  private sessionEvents = new Map<string, (method: string) => void>();
+  private sessionEvents = new Map<string, (method: string, params: any) => void>();
   private constructor(
     private proc: ReturnType<typeof Bun.spawn>,
     private ws: WebSocket,
@@ -795,7 +795,7 @@ class CdpBrowser {
       }
       return;
     }
-    if (msg.sessionId) this.sessionEvents.get(msg.sessionId)?.(msg.method);
+    if (msg.sessionId) this.sessionEvents.get(msg.sessionId)?.(msg.method, msg.params);
   }
 
   private send(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> {
@@ -817,9 +817,18 @@ class CdpBrowser {
     const { sessionId } = await this.send("Target.attachToTarget", { targetId, flatten: true });
     try {
       let loaded!: () => void;
+      let idle!: () => void;
       const loadP = new Promise<void>((r) => { loaded = r; });
-      this.sessionEvents.set(sessionId, (method) => { if (method === "Page.loadEventFired") loaded(); });
+      const idleP = new Promise<void>((r) => { idle = r; });
+      this.sessionEvents.set(sessionId, (method, params) => {
+        if (method === "Page.loadEventFired") loaded();
+        // networkIdle = no in-flight requests for 500ms — the signal that an
+        // SPA's after-load data fetching actually finished. (WebSockets don't
+        // count, so live-socket pages still idle.)
+        if (method === "Page.lifecycleEvent" && params?.name === "networkIdle") idle();
+      });
       await this.send("Page.enable", {}, sessionId);
+      await this.send("Page.setLifecycleEventsEnabled", { enabled: true }, sessionId);
       await this.send(
         "Emulation.setDeviceMetricsOverride",
         // mobile:false on purpose — we want the LITERAL layout width (matching the
@@ -829,21 +838,49 @@ class CdpBrowser {
         sessionId,
       );
       await this.send("Page.navigate", { url }, sessionId);
-      await Promise.race([loadP, new Promise((r) => setTimeout(r, 8_000))]);
-      await new Promise((r) => setTimeout(r, 600));
-      await this.send("Runtime.evaluate", { expression: FREEZE_JS }, sessionId).catch(() => { /* about:blank etc. */ });
+      // Settle in three stages, each there for a failure mode we've actually
+      // shipped: (1) load + networkIdle, capped — SPA shells fire `load` before
+      // their data, which put spinners on boards; (2) poll until the page has
+      // PAINTED something (auth redirects go network-quiet while still blank);
+      // (3) one paint beat.
+      await Promise.race([Promise.all([loadP, idleP]), new Promise((r) => setTimeout(r, 12_000))]);
+      await new Promise((r) => setTimeout(r, 400));
+      if (!process.env.DRAFTY_NO_FREEZE) await this.send("Runtime.evaluate", { expression: FREEZE_JS }, sessionId).catch(() => { /* about:blank etc. */ });
       let clip: Record<string, number> | undefined;
       if (opts.full) {
+        // Full-page captures never scroll, so loading="lazy" images below the
+        // fold would ship as blanks — force them eager and let them land.
+        await this.send(
+          "Runtime.evaluate",
+          { expression: "document.querySelectorAll('img[loading=lazy]').forEach(i => { i.loading = 'eager'; })" },
+          sessionId,
+        ).catch(() => { /* no DOM */ });
+        await new Promise((r) => setTimeout(r, 1_200));
         const m = await this.send("Page.getLayoutMetrics", {}, sessionId);
         const contentH = Math.ceil(m.cssContentSize?.height ?? m.contentSize?.height ?? opts.height);
         clip = { x: 0, y: 0, width: opts.width, height: Math.min(20_000, Math.max(opts.height, contentH)), scale: 1 };
       }
-      const res = await this.send(
-        "Page.captureScreenshot",
-        { format: opts.format ?? "png", ...(opts.format && opts.format !== "png" ? { quality: 82 } : {}), ...(clip ? { clip, captureBeyondViewport: true } : {}) },
-        sessionId,
-      );
-      writeFileSync(opts.out, Buffer.from(res.data, "base64"));
+      // Stability gate: the only honest "has it painted?" signal is the pixels.
+      // Recapture until two consecutive frames match byte-for-length and aren't
+      // blank-tiny (a flat white frame compresses to almost nothing). Pages
+      // that are GENUINELY minimal settle instantly; slow SPAs get up to ~9s of
+      // extra patience; a truly blank page ships blank — the truth.
+      const capture = async () =>
+        this.send(
+          "Page.captureScreenshot",
+          { format: opts.format ?? "png", ...(opts.format && opts.format !== "png" ? { quality: 82 } : {}), ...(clip ? { clip, captureBeyondViewport: true } : {}) },
+          sessionId,
+        );
+      let frame = await capture();
+      for (let i = 0; i < 12; i++) {
+        const blankish = frame.data.length < 12_000; // base64 length ≈ bytes × 4/3
+        await new Promise((r) => setTimeout(r, blankish ? 700 : 350));
+        const next = await capture();
+        const stable = Math.abs(next.data.length - frame.data.length) / Math.max(next.data.length, frame.data.length) < 0.005;
+        frame = next;
+        if (stable && !blankish) break;
+      }
+      writeFileSync(opts.out, Buffer.from(frame.data, "base64"));
     } finally {
       this.sessionEvents.delete(sessionId);
       this.send("Target.closeTarget", { targetId }).catch(() => { /* tab already gone */ });
@@ -1115,7 +1152,7 @@ type PresentScreen = { url: string; label: string };
 // shot), timestamp prominent, live URL quiet. The JSON meta block is what makes
 // refresh deterministic — a re-run with --slug reads it back instead of
 // re-discovering.
-function presentBoardHtml(root: URL, screens: PresentScreen[], widths: number[], stamp: string, shotFile: (i: number, w: number) => string): string {
+function presentBoardHtml(root: URL, screens: PresentScreen[], widths: number[], stamp: string, shotFile: (i: number, w: number) => string, dupNote: (i: number) => string | undefined = () => undefined): string {
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
   const meta = JSON.stringify({ kind: "drafty-present", root: root.href, widths, screens }, null, 1);
   const sections = screens
@@ -1131,7 +1168,7 @@ function presentBoardHtml(root: URL, screens: PresentScreen[], widths: number[],
         .join("\n      ");
       return `  <section class="screen">
     <h2>${esc(sc.label)}</h2>
-    <p class="meta"><a href="${esc(sc.url)}" rel="noopener">${esc(path)}</a> · captured ${stamp}</p>
+    <p class="meta"><a href="${esc(sc.url)}" rel="noopener">${esc(path)}</a> · captured ${stamp}${dupNote(i) ? ` · <em>⚠ ${esc(dupNote(i)!)}</em>` : ""}</p>
     <div class="pair">
       ${figs}
     </div>
@@ -1250,8 +1287,8 @@ async function present(args: string[]) {
   // WebP: page screenshots of photo-heavy sites are ~5x smaller than PNG,
   // which is what keeps a 16-image board from being laggy to scroll.
   const shotFile = (i: number, w: number) => `screens/${i}-${w}.webp`;
-  // Pool of 8 concurrent tabs (one shared Chrome): SPA-ish pages wait out the
-  // settle cap, so width of the pool ≈ wall-clock divisor.
+  // Pool of 4 concurrent tabs (one shared Chrome): wider pools made heavy SPAs
+  // starve each other's rendering — frames went blank under contention.
   const jobs: Array<{ i: number; w: number }> = [];
   for (let i = 0; i < screens.length; i++) for (const w of widths) jobs.push({ i, w });
   let next = 0;
@@ -1262,10 +1299,44 @@ async function present(args: string[]) {
       await localShot(screens![i].url, { width: w, height: w < 500 ? 844 : 900, out: join(work, shotFile(i, w)), format: "webp" });
     }
   };
-  await Promise.all(Array.from({ length: Math.min(8, jobs.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(4, jobs.length) }, worker));
+  // Self-heal: concurrent heavy-SPA tabs can starve each other's compositor and
+  // ship blank frames (verified: the same URLs render fine single-tab). A blank
+  // WebP/PNG is tiny, so re-shoot the tiny ones serially in a calm browser.
+  const blanks = jobs.filter(({ i, w }) => {
+    try { return statSync(join(work, shotFile(i, w))).size < 12_000; } catch { return true; }
+  });
+  if (blanks.length) {
+    console.error(`  ↻ ${blanks.length} frame${blanks.length > 1 ? "s" : ""} look blank — re-shooting serially`);
+    for (const { i, w } of blanks) {
+      console.error(`  ◉ ${screens![i].label} @ ${w}px (retry)`);
+      await localShot(screens![i].url, { width: w, height: w < 500 ? 844 : 900, out: join(work, shotFile(i, w)), format: "webp" });
+    }
+  }
+
+  // Auth-walled routes all render the same sign-in screen — flag clusters of
+  // near-identical frames (byte-size proximity per width is a cheap, honest
+  // proxy) so a board can't quietly show one wall five times.
+  const dupNotes = new Map<number, string>();
+  for (const w of widths) {
+    const sized = screens.map((sc, i) => {
+      try { return { i, size: statSync(join(work, shotFile(i, w))).size }; } catch { return { i, size: -1 }; }
+    }).filter((x) => x.size > 0);
+    for (let a = 0; a < sized.length; a++) {
+      const cluster = sized.filter((b) => Math.abs(b.size - sized[a].size) / Math.max(b.size, sized[a].size) < 0.02);
+      if (cluster.length >= 3 && !dupNotes.has(sized[a].i)) {
+        for (const c of cluster) dupNotes.set(c.i, `renders nearly identically to ${cluster.length - 1} other screen${cluster.length > 2 ? "s" : ""} — possibly auth-walled`);
+      }
+    }
+  }
+  if (dupNotes.size) {
+    const names = [...dupNotes.keys()].map((i) => screens[i].label).join(", ");
+    console.error(`  ⚠ ${dupNotes.size} screens render nearly identically (login wall?): ${names}`);
+    console.error(`    re-run with --urls to swap them for public pages, or leave them as the anonymous-visitor truth`);
+  }
 
   const stamp = new Date().toISOString().slice(0, 16).replace("T", " ") + " UTC";
-  const html = presentBoardHtml(root, screens, widths, stamp, shotFile);
+  const html = presentBoardHtml(root, screens, widths, stamp, shotFile, (i) => dupNotes.get(i));
   const boardFile = join(work, "board.html");
   writeFileSync(boardFile, html);
 
