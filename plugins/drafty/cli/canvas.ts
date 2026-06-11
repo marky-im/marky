@@ -723,74 +723,157 @@ function findChrome(): string | null {
   return null;
 }
 
-// Jump finite CSS animations to their end state + disable transitions, so the
-// same content always shoots the same settled frame (matches the server's
-// ?freeze=1 behavior).
-const FREEZE_CSS = "<style>*{animation-delay:-10000s!important;animation-play-state:paused!important;transition:none!important}</style>";
+// Deterministic frames: jump finite CSS animations to their end state and
+// disable transitions before shooting (matches the server's ?freeze=1).
+// Injected over CDP after load, so it works for files and URLs alike.
+const FREEZE_JS =
+  '(() => { const s = document.createElement("style"); s.textContent = "*{animation-delay:-10000s!important;animation-play-state:paused!important;transition:none!important}"; (document.head || document.documentElement).appendChild(s); })()';
 
-// Headless Chrome on macOS clamps windows to a ~500px minimum WIDTH — a bare
-// `--window-size=390,…` lays the page out at 500 CSS px and crops the shot,
-// which silently lies about phone rendering (text wraps differently, overlap
-// bugs vanish). For sub-500 widths, render the target inside an IFRAME of the
-// exact width: the iframe gets a true narrow layout viewport. The image stays
-// window-wide; the area right of the artifact is hatched so it can't be
-// mistaken for content.
-const CHROME_MIN_W = 500;
+// ── CDP-driven local rendering ───────────────────────────────────────────────
+// One persistent headless Chrome per process, driven over the DevTools
+// Protocol. This replaces per-shot `--screenshot` launches, which had three
+// structural problems: a cold Chrome start per image, no reliable settle
+// timeout in headless=new (pages holding live sockets ran out their natural
+// load — minutes), and a ~500px window floor that forced an iframe harness
+// for phone widths. CDP gives us tabs (cheap, parallel), our own settle
+// clock (load event OR a hard cap), and true viewport emulation at any width.
+type CdpPending = { resolve: (v: any) => void; reject: (e: Error) => void };
 
-async function localShot(target: string, opts: { width: number; height: number; out: string }): Promise<void> {
-  const chrome = findChrome();
-  if (!chrome) die("no Chrome/Chromium found for local rendering — set DRAFTY_CHROME to a browser binary");
-  const tmps: string[] = [];
-  let src = target;
-  if (existsSync(target)) {
-    let html = readFileSync(resolve(target), "utf8");
-    html = html.includes("</head>") ? html.replace("</head>", FREEZE_CSS + "</head>") : FREEZE_CSS + html;
-    const tmp = join(tmpdir(), `drafty-shot-src-${process.pid}-${Math.random().toString(36).slice(2, 8)}.html`);
-    writeFileSync(tmp, html);
-    tmps.push(tmp);
-    src = "file://" + tmp;
+class CdpBrowser {
+  private nextId = 1;
+  private pending = new Map<number, CdpPending>();
+  private sessionEvents = new Map<string, (method: string) => void>();
+  private constructor(
+    private proc: ReturnType<typeof Bun.spawn>,
+    private ws: WebSocket,
+    private profile: string,
+  ) {
+    ws.onmessage = (ev) => this.onMessage(String(ev.data));
+    ws.onclose = () => {
+      for (const [, pend] of this.pending) pend.reject(new Error("CDP connection closed"));
+      this.pending.clear();
+    };
   }
-  const narrow = opts.width < CHROME_MIN_W;
-  if (narrow) {
-    if (!src.startsWith("file://"))
-      console.error(`  note: most sites refuse iframing — if the shot comes back blank, use --width ${CHROME_MIN_W}+ for URL targets`);
-    const harness =
-      `<!doctype html><html><head><style>` +
-      `body{margin:0;background:repeating-linear-gradient(45deg,#ececec 0 8px,#dcdcdc 8px 16px)}` +
-      `iframe{display:block;width:${opts.width}px;height:${opts.height}px;border:0;background:#fff}` +
-      `</style></head><body><iframe src="${src.replace(/"/g, "&quot;")}"></iframe></body></html>`;
-    const h = join(tmpdir(), `drafty-shot-harness-${process.pid}-${Math.random().toString(36).slice(2, 8)}.html`);
-    writeFileSync(h, harness);
-    tmps.push(h);
-    src = "file://" + h;
-    console.error(`  note: artifact is the left ${opts.width}px of the image (hatched area is outside the viewport)`);
+
+  static async launch(): Promise<CdpBrowser> {
+    const chrome = findChrome();
+    if (!chrome) die("no Chrome/Chromium found for local rendering — set DRAFTY_CHROME to a browser binary");
+    const profile = join(tmpdir(), `drafty-cdp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`);
+    const proc = Bun.spawn(
+      [chrome, "--headless=new", "--remote-debugging-port=0", "--no-first-run", "--disable-extensions", "--hide-scrollbars", "--mute-audio", `--user-data-dir=${profile}`, "about:blank"],
+      { stdout: "ignore", stderr: "ignore" },
+    );
+    // Chrome publishes its ephemeral DevTools port in the profile dir.
+    const portFile = join(profile, "DevToolsActivePort");
+    let port = 0;
+    let path = "";
+    for (let i = 0; i < 150 && !port; i++) {
+      if (existsSync(portFile)) {
+        const [portLine, wsPath] = readFileSync(portFile, "utf8").split("\n");
+        if (Number(portLine) && wsPath) { port = Number(portLine); path = wsPath.trim(); }
+      }
+      if (!port) await new Promise((r) => setTimeout(r, 100));
+    }
+    if (!port) { try { proc.kill(); } catch { /* already gone */ } die("chrome did not expose a DevTools port"); }
+    const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`);
+    await new Promise<void>((res, rej) => {
+      ws.onopen = () => res();
+      ws.onerror = () => rej(new Error("could not connect to Chrome's DevTools socket"));
+    });
+    return new CdpBrowser(proc, ws, profile);
   }
-  // A throwaway profile dir, unique PER CALL: without it the spawn can block on
-  // the running Chrome's profile lock, and concurrent shots (present runs a
-  // small pool) would otherwise collide on a shared dir.
-  const profile = join(tmpdir(), `drafty-shot-profile-${process.pid}-${Math.random().toString(36).slice(2, 8)}`);
-  // Async spawn so a pool of shots can actually run concurrently (spawnSync
-  // blocks the event loop and serializes everything).
-  const proc = Bun.spawn(
-    [
-      chrome, "--headless=new", "--hide-scrollbars", "--no-first-run", "--disable-extensions",
-      // lets the file:// harness iframe load its file:// target
-      ...(narrow ? ["--allow-file-access-from-files"] : []),
-      `--user-data-dir=${profile}`,
-      `--window-size=${Math.max(opts.width, CHROME_MIN_W)},${opts.height}`,
-      // Pages that hold live sockets (or iframes that do) may never fire a
-      // clean load — --timeout makes Chrome stop and shoot what's rendered;
-      // the spawn timeout below is the hard backstop.
-      "--timeout=12000",
-      `--screenshot=${opts.out}`, src,
-    ],
-    { stdout: "pipe", stderr: "pipe", timeout: 45_000 },
-  );
-  const stderrText = await new Response(proc.stderr).text();
-  await proc.exited;
-  for (const t of tmps) rmSync(t, { force: true });
-  rmSync(profile, { recursive: true, force: true });
-  if (!existsSync(opts.out)) die(`chrome render failed: ${stderrText.slice(-400)}`);
+
+  private onMessage(raw: string) {
+    let msg: any;
+    try { msg = JSON.parse(raw); } catch { return; }
+    if (msg.id != null) {
+      const pend = this.pending.get(msg.id);
+      if (pend) {
+        this.pending.delete(msg.id);
+        if (msg.error) pend.reject(new Error(msg.error.message || "CDP error"));
+        else pend.resolve(msg.result);
+      }
+      return;
+    }
+    if (msg.sessionId) this.sessionEvents.get(msg.sessionId)?.(msg.method);
+  }
+
+  private send(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> {
+    const id = this.nextId++;
+    this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      setTimeout(() => {
+        if (this.pending.delete(id)) reject(new Error(`CDP ${method} timed out`));
+      }, 30_000);
+    });
+  }
+
+  // Render one page in its own tab: emulate the exact viewport, navigate, wait
+  // for the load event OR the settle cap (whichever first — pages holding live
+  // sockets never "finish"), give paint one beat, freeze animations, shoot.
+  async shot(url: string, opts: { width: number; height: number; out: string; full?: boolean }): Promise<void> {
+    const { targetId } = await this.send("Target.createTarget", { url: "about:blank" });
+    const { sessionId } = await this.send("Target.attachToTarget", { targetId, flatten: true });
+    try {
+      let loaded!: () => void;
+      const loadP = new Promise<void>((r) => { loaded = r; });
+      this.sessionEvents.set(sessionId, (method) => { if (method === "Page.loadEventFired") loaded(); });
+      await this.send("Page.enable", {}, sessionId);
+      await this.send(
+        "Emulation.setDeviceMetricsOverride",
+        // mobile:false on purpose — we want the LITERAL layout width (matching the
+        // artifact iframe these widths are calibrated against), not phone-browser
+        // semantics where a meta-less page falls back to a 980px layout viewport.
+        { width: opts.width, height: opts.height, deviceScaleFactor: 1, mobile: false },
+        sessionId,
+      );
+      await this.send("Page.navigate", { url }, sessionId);
+      await Promise.race([loadP, new Promise((r) => setTimeout(r, 8_000))]);
+      await new Promise((r) => setTimeout(r, 600));
+      await this.send("Runtime.evaluate", { expression: FREEZE_JS }, sessionId).catch(() => { /* about:blank etc. */ });
+      let clip: Record<string, number> | undefined;
+      if (opts.full) {
+        const m = await this.send("Page.getLayoutMetrics", {}, sessionId);
+        const contentH = Math.ceil(m.cssContentSize?.height ?? m.contentSize?.height ?? opts.height);
+        clip = { x: 0, y: 0, width: opts.width, height: Math.min(20_000, Math.max(opts.height, contentH)), scale: 1 };
+      }
+      const res = await this.send(
+        "Page.captureScreenshot",
+        { format: "png", ...(clip ? { clip, captureBeyondViewport: true } : {}) },
+        sessionId,
+      );
+      writeFileSync(opts.out, Buffer.from(res.data, "base64"));
+    } finally {
+      this.sessionEvents.delete(sessionId);
+      this.send("Target.closeTarget", { targetId }).catch(() => { /* tab already gone */ });
+    }
+  }
+
+  close() {
+    try { this.ws.close(); } catch { /* already closed */ }
+    try { this.proc.kill(); } catch { /* already gone */ }
+    rmSync(this.profile, { recursive: true, force: true });
+  }
+}
+
+// Shared browser for the process: `shot` pays one launch; `present` reuses it
+// across every screen. Killed on exit so no headless Chrome outlives the CLI.
+let cdpLive: CdpBrowser | null = null;
+let cdpLaunching: Promise<CdpBrowser> | null = null;
+function cdpBrowser(): Promise<CdpBrowser> {
+  if (!cdpLaunching) {
+    cdpLaunching = CdpBrowser.launch().then((b) => { cdpLive = b; return b; });
+    process.on("exit", () => cdpLive?.close());
+  }
+  return cdpLaunching;
+}
+
+async function localShot(target: string, opts: { width: number; height: number; out: string; full?: boolean }): Promise<void> {
+  const url = existsSync(target) ? "file://" + resolve(target) : target;
+  const browser = await cdpBrowser();
+  await browser.shot(url, opts);
+  if (!existsSync(opts.out)) die("render failed: empty screenshot");
 }
 
 async function shot(args: string[]) {
@@ -809,11 +892,9 @@ async function shot(args: string[]) {
   // render the mockup you just wrote, look at it, then publish.
   if (existsSync(target) || /^https?:\/\//.test(target)) {
     const width = widthFlag ? Number(widthFlag) : 390;
-    // --full has no real meaning without knowing content height; a tall window
-    // approximates it for local shots.
-    const height = heightFlag ? Number(heightFlag) : full ? 4000 : 844;
+    const height = heightFlag ? Number(heightFlag) : 844;
     out = out ?? join(tmpdir(), `drafty-shot-${Date.now()}-${width}.png`);
-    await localShot(target, { width, height, out });
+    await localShot(target, { width, height, out, full });
     console.log(out);
     return;
   }
@@ -851,7 +932,7 @@ async function shot(args: string[]) {
     const tmpHtml = join(tmpdir(), `drafty-shot-pull-${process.pid}.html`);
     writeFileSync(tmpHtml, body);
     out = out ?? join(tmpdir(), `drafty-shot-${slug}-${width}.png`);
-    await localShot(tmpHtml, { width, height: heightFlag ? Number(heightFlag) : full ? 4000 : 844, out });
+    await localShot(tmpHtml, { width, height: heightFlag ? Number(heightFlag) : 844, out, full });
     rmSync(tmpHtml, { force: true });
     console.log(out);
     return;
@@ -1041,14 +1122,10 @@ function presentBoardHtml(root: URL, screens: PresentScreen[], widths: number[],
     .map((sc, i) => {
       const path = new URL(sc.url).pathname || "/";
       const figs = widths
-        .map((w) => {
-          // Sub-500px shots come back 500px wide (Chrome's window floor) with a
-          // hatched dead zone right of the real viewport — crop it off with CSS
-          // so the board shows exactly the w-px artifact.
-          const img = `<img src="${shotFile(i, w)}" alt="${esc(sc.label)} — ${w}px" />`;
-          const body = w < 500 ? `<div class="crop" style="--vw:${w}">${img}</div>` : img;
-          return `<figure>${body}<figcaption>${w}px</figcaption></figure>`;
-        })
+        .map(
+          (w) =>
+            `<figure><img src="${shotFile(i, w)}" alt="${esc(sc.label)} — ${w}px" /><figcaption>${w}px</figcaption></figure>`,
+        )
         .join("\n      ");
       return `  <section class="screen">
     <h2>${esc(sc.label)}</h2>
@@ -1087,8 +1164,6 @@ function presentBoardHtml(root: URL, screens: PresentScreen[], widths: number[],
   @media (max-width: 720px) { .pair { grid-template-columns: 1fr; } }
   figure { margin: 0; }
   figure img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
-  .crop { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; }
-  .crop img { width: calc(100% * 500 / var(--vw)); border: 0; border-radius: 0; }
   figcaption { font-size: 11px; color: var(--muted); margin-top: 5px; font-family: ui-monospace, monospace; }
 </style>
 </head>

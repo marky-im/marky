@@ -435,8 +435,8 @@ canvas yet.
   `--urls a,b,c`, then run for real.
 - **Review the board before handing it over** — you have eyes; use them.
   `drafty shot <board-slug> --width 1280` (or open the canvas) and check the
-  frames: a site that refuses iframing renders its phone-width frames blank
-  (the hatched area). If so, re-run with `--widths 1280` and say so.
+  frames render real content (bot-walled sites can come back as challenge
+  pages or blanks; re-run with `--urls` for the affected screens or say so).
 - **The feedback loop on a board** is the point-anchor flow: humans tap a spot
   on a screenshot; your inbox carries the image, the point, and (in the board's
   meta line) the live URL — so you can also re-render the *current* page
