@@ -812,7 +812,7 @@ class CdpBrowser {
   // Render one page in its own tab: emulate the exact viewport, navigate, wait
   // for the load event OR the settle cap (whichever first — pages holding live
   // sockets never "finish"), give paint one beat, freeze animations, shoot.
-  async shot(url: string, opts: { width: number; height: number; out: string; full?: boolean }): Promise<void> {
+  async shot(url: string, opts: { width: number; height: number; out: string; full?: boolean; format?: "png" | "webp" | "jpeg" }): Promise<void> {
     const { targetId } = await this.send("Target.createTarget", { url: "about:blank" });
     const { sessionId } = await this.send("Target.attachToTarget", { targetId, flatten: true });
     try {
@@ -840,7 +840,7 @@ class CdpBrowser {
       }
       const res = await this.send(
         "Page.captureScreenshot",
-        { format: "png", ...(clip ? { clip, captureBeyondViewport: true } : {}) },
+        { format: opts.format ?? "png", ...(opts.format && opts.format !== "png" ? { quality: 82 } : {}), ...(clip ? { clip, captureBeyondViewport: true } : {}) },
         sessionId,
       );
       writeFileSync(opts.out, Buffer.from(res.data, "base64"));
@@ -869,7 +869,7 @@ function cdpBrowser(): Promise<CdpBrowser> {
   return cdpLaunching;
 }
 
-async function localShot(target: string, opts: { width: number; height: number; out: string; full?: boolean }): Promise<void> {
+async function localShot(target: string, opts: { width: number; height: number; out: string; full?: boolean; format?: "png" | "webp" | "jpeg" }): Promise<void> {
   const url = existsSync(target) ? "file://" + resolve(target) : target;
   const browser = await cdpBrowser();
   await browser.shot(url, opts);
@@ -1124,7 +1124,9 @@ function presentBoardHtml(root: URL, screens: PresentScreen[], widths: number[],
       const figs = widths
         .map(
           (w) =>
-            `<figure><img src="${shotFile(i, w)}" alt="${esc(sc.label)} — ${w}px" /><figcaption>${w}px</figcaption></figure>`,
+            // lazy + async + explicit dimensions: off-screen frames don't load
+            // until scrolled to, and the layout never shifts while they do.
+            `<figure><img src="${shotFile(i, w)}" alt="${esc(sc.label)} — ${w}px" width="${w}" height="${w < 500 ? 844 : 900}" loading="lazy" decoding="async" /><figcaption>${w}px</figcaption></figure>`,
         )
         .join("\n      ");
       return `  <section class="screen">
@@ -1245,9 +1247,11 @@ async function present(args: string[]) {
   // Shoot every screen at every width (local Chrome — zero credits).
   const work = join(tmpdir(), `drafty-present-${process.pid}-${Math.random().toString(36).slice(2, 8)}`);
   mkdirSync(join(work, "screens"), { recursive: true });
-  const shotFile = (i: number, w: number) => `screens/${i}-${w}.png`;
-  // Pool of 4 concurrent Chromes: SPA-ish pages run out the full settle
-  // timeout, so serial shots made an 8-screen board take many minutes.
+  // WebP: page screenshots of photo-heavy sites are ~5x smaller than PNG,
+  // which is what keeps a 16-image board from being laggy to scroll.
+  const shotFile = (i: number, w: number) => `screens/${i}-${w}.webp`;
+  // Pool of 8 concurrent tabs (one shared Chrome): SPA-ish pages wait out the
+  // settle cap, so width of the pool ≈ wall-clock divisor.
   const jobs: Array<{ i: number; w: number }> = [];
   for (let i = 0; i < screens.length; i++) for (const w of widths) jobs.push({ i, w });
   let next = 0;
@@ -1255,10 +1259,10 @@ async function present(args: string[]) {
     while (next < jobs.length) {
       const { i, w } = jobs[next++];
       console.error(`  ◉ ${screens![i].label} @ ${w}px`);
-      await localShot(screens![i].url, { width: w, height: w < 500 ? 844 : 900, out: join(work, shotFile(i, w)) });
+      await localShot(screens![i].url, { width: w, height: w < 500 ? 844 : 900, out: join(work, shotFile(i, w)), format: "webp" });
     }
   };
-  await Promise.all(Array.from({ length: Math.min(4, jobs.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(8, jobs.length) }, worker));
 
   const stamp = new Date().toISOString().slice(0, 16).replace("T", " ") + " UTC";
   const html = presentBoardHtml(root, screens, widths, stamp, shotFile);
