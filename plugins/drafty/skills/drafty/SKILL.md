@@ -143,6 +143,7 @@ the update unprompted, since it changes their environment.
 | `drafty shot <slug>\|<file.html>\|<url> [--width N] [--revision <id>] [--annotation <id>] [--full] [-o out]` | **Render to an image and print its path** — your eyes. A local file/URL renders via headless Chrome on this machine; a public canvas renders via the server (cached per revision×width); a private canvas auto-falls back to rendering pulled content locally. `--annotation <id>` reproduces a commenter's exact view (their width + revision, anchored element highlighted). Read the printed path to *see* it. |
 | `drafty context [--limit N] [--archived] [--json]` | **Orientation in one call** — identity, local git repo/branch, the projects + tags already in use (with counts), and the most-recent canvases (capped to ~15; `--limit 0` for all). Run it before a push/update to pick the project, reuse tags, and decide create-vs-update. |
 | `drafty canvas ls [--project P] [--tag T] [--unfiled] [--archived] [--json]` | The filtered / full list — **newest first**, the same order as the web home and `drafty context`, each row showing project · `#tags` · open-thread count. Orient with `drafty context` first; reach for `ls` to **drill in or filter**: `--project "<name>"`, `--tag <label>`, `--unfiled` (missing a project or tags), `--archived`. |
+| `drafty sweep [--project P] [--json]` | **Reconcile canvases with shipped code** — evidence, not verdicts. Flags active canvases that *look shipped* (slug referenced in a commit of the cwd repo after the canvas last changed) or *look stale* (idle 3+ weeks, no open threads); pinned canvases are never candidates. Run it from the repo so git evidence is available. You judge each candidate, then receipt → close threads → archive (see **The sweep** below). |
 | `drafty changelog [--json]` | What shipped on Drafty, grouped by week (public feed; no sign-in needed). Use when the human asks "what's new in drafty". |
 | `drafty login` | Sign the human in — opens their browser; one sign-in covers web + CLI, and any canvases made before signing in fold into the account. `drafty logout` signs out. |
 | `drafty canvas claim <slug>` | Take ownership of a *provisional* canvas (one minted by `/get/provision`) so it stops being ephemeral and lists under the human's account. Requires being signed in (`drafty login` first); authorize the transfer with the canvas's provision token: `DRAFTY_TOKEN=<provision token> drafty canvas claim <slug>`. Only when the human asks to keep it. |
@@ -224,11 +225,15 @@ and `rm <slug> --yes` to delete for real. Because the watch loop skips archived 
 anything you've shelved so a stray comment doesn't pull Claude back onto it.
 
 **Archive on ship — don't wait to be asked.** A canvas is usually a plan/design/spec that Claude
-then builds. When that work actually ships — the PR is merged, the change is deployed — archive
-the canvas: `drafty canvas archive <slug>`. That's the "done" signal: it clears the canvas off the
-home list while keeping its link and history. Do it on your own at the ship moment (right after you
-merge/deploy), the way you'd close a tracking issue. Don't archive just because comments are
-resolved — a cleared inbox isn't a ship.
+then builds. When that work actually ships — the PR is merged, the change is deployed — close the
+canvas out properly (the **ship-moment micro-sweep**, see **The sweep** below): stamp a Shipped
+receipt, reply + resolve its open threads with the landing commit, then
+`drafty canvas archive <slug>`. That's the "done" signal: it clears the canvas off the home list
+while keeping its link and history. Do it on your own at the ship moment (right after you
+merge/deploy), the way you'd close a tracking issue — no need to confirm first; the merge you just
+made *is* the evidence. Don't archive just because comments are resolved — a cleared inbox isn't
+a ship. And when the work ships via a PR or commit, **mention the canvas URL in the PR
+description / commit message** — that's what makes later sweeps deterministic.
 
 ### File it as you publish — don't wait to be asked
 
@@ -277,6 +282,57 @@ ones", or "tidy up" (and `drafty context` shows an *Unfiled* count):
 
 (And note: `drafty doctor` is a *setup* health check — PATH, token, server — it never touches
 canvas data.)
+
+## The sweep — reconcile canvases with shipped code
+
+A canvas whose work has shipped should be archived with a record of *where* it landed — not
+left to rot on the list, and not silently hidden either. The sweep is that reconciliation.
+
+**Triggers — the human never has to remember to ask:**
+1. **The context nudge (primary).** `drafty context` prints a `Sweep:` line whenever active
+   canvases look shipped or stale. When you see it during a drafty task, offer it: *"3 canvases
+   look shipped — want me to sweep?"* Don't silently ignore the line; don't silently act on it.
+2. **Ship moment.** You just merged/deployed work that a canvas describes → run the micro-sweep
+   for that canvas right away, no confirmation needed (your own merge is the evidence).
+3. **On demand.** "sweep my canvases", "tidy drafty", "which of these shipped?" → full sweep.
+
+**The workflow:**
+1. `drafty sweep --json` **from the relevant repo** (commit evidence comes from the cwd's git
+   log; from outside a repo you only get idle signals).
+2. **Judge each candidate yourself** — the flags are heuristics. Read the canvas
+   (`drafty canvas pull <slug>`), check the code/commits: is what the canvas describes actually
+   implemented? Classify: **shipped** / **partial** / **leave alone**.
+3. **Propose before acting** — show the human the verdict list (a wrong archive silently parks
+   the comment loop). Skip the confirmation only at a ship moment (trigger 2).
+4. For each **shipped** canvas:
+   - **Stamp a receipt** — pull the body, append the Shipped block (below), push it back with
+     `--slug <slug>`. The archived canvas becomes its own record: spec on top, receipt at the bottom.
+   - **Close the loop for commenters** — for each still-open thread:
+     `drafty comments reply <annId> "Shipped in <sha> — <one line>"` then
+     `drafty comments resolve <annId>`. People who left feedback get closure, not silence.
+   - `drafty canvas archive <slug>`.
+5. For each **partial** canvas: don't archive. Leave a status comment on the canvas instead —
+   what landed (with commits), what's still open — so the canvas tracks its own progress and the
+   next sweep picks up where this one left off.
+6. A **stale** canvas that was superseded or abandoned: confirm with the human, then archive
+   (no receipt — nothing shipped; a one-line "superseded by <x>" note is kinder than nothing).
+
+**The receipt** — append to the canvas body. Markdown:
+
+```markdown
+---
+
+## ✅ Shipped — 2026-06-11
+
+Landed in `a1b2c3d`, `e4f5a6b` (drafty-im/drafty) — sweep command, context nudge, skill workflow.
+```
+
+HTML: same content as a small muted footer `<section>` before `</body>` (match the canvas's
+styling; don't break its layout). Keep it to date + commits/PR + one line on what landed.
+
+**Bounds:** never sweep pinned canvases (deliberately long-lived — dashboards, living docs);
+`drafty sweep` already excludes them. Slug-in-commit evidence only works when ships mention the
+canvas URL — keep doing that (see **Archive on ship** above).
 
 ## Typical workflows
 

@@ -1230,6 +1230,108 @@ function gitContext(): { cwd: string; root: string | null; repo: string | null; 
   };
 }
 
+// ── sweep — reconcile canvases with shipped code ─────────────────────────────
+// Deterministic *evidence*, not verdicts: which active canvases look shipped
+// (their slug shows up in a commit made after the canvas last changed) or stale
+// (idle for weeks with no open threads). The judgment — "is this spec actually
+// implemented?" — is prose-vs-code reading, so it belongs to the agent; the CLI
+// just gathers the facts and the skill carries the workflow (receipt → close
+// threads → archive).
+const SWEEP_IDLE_DAYS = 21;
+const SWEEP_LOG_WINDOW = "180.days";
+
+type SweepCommit = { sha: string; ts: number; subject: string };
+type SweepRow = {
+  slug: string; title: string; project: string | null; tags: string[];
+  open: number; updatedAt: number; idleDays: number;
+  commits: SweepCommit[]; commitsAfterUpdate: number;
+  looksShipped: boolean; looksStale: boolean;
+};
+
+// One pass over HEAD's recent history (not --all: a slug on an unmerged branch
+// isn't shipped). \x1f/\x1e separators can't appear in commit text.
+function gitLogEntries(root: string | null): { sha: string; ts: number; subject: string; text: string }[] {
+  if (!root) return [];
+  try {
+    const p = Bun.spawnSync(
+      ["git", "log", `--since=${SWEEP_LOG_WINDOW}`, "--pretty=format:%H%x1f%ct%x1f%s%x1f%B%x1e"],
+      { cwd: root, stdout: "pipe", stderr: "ignore" },
+    );
+    if (p.exitCode !== 0) return [];
+    return p.stdout.toString().split("\x1e").map((s) => s.trim()).filter(Boolean).map((rec) => {
+      const [sha, ct, subject, body] = rec.split("\x1f");
+      return { sha: (sha || "").slice(0, 7), ts: (Number(ct) || 0) * 1000, subject: subject || "", text: body || "" };
+    });
+  } catch { return []; }
+}
+
+// Pinned canvases are deliberately long-lived (dashboards, living docs) — never
+// sweep candidates. Slugs are collision-proof (`launch-plan-9fk2q`), so a plain
+// substring match against commit messages is exact enough.
+function sweepEvidence(items: any[], log: ReturnType<typeof gitLogEntries>): SweepRow[] {
+  const now = Date.now();
+  return items.filter((d) => !d.archived && !d.pinned).map((d) => {
+    const commits = log.filter((e) => e.text.includes(d.slug)).map(({ sha, ts, subject }) => ({ sha, ts, subject }));
+    const commitsAfterUpdate = commits.filter((c) => c.ts > (d.updatedAt || 0)).length;
+    const idleDays = d.updatedAt ? Math.floor((now - d.updatedAt) / 86_400_000) : 0;
+    const looksShipped = commitsAfterUpdate > 0;
+    const looksStale = !looksShipped && idleDays >= SWEEP_IDLE_DAYS && !(d.open || 0);
+    return {
+      slug: d.slug, title: d.title, project: d.project || null, tags: Array.isArray(d.tags) ? d.tags : [],
+      open: d.open || 0, updatedAt: d.updatedAt || 0, idleDays,
+      commits, commitsAfterUpdate, looksShipped, looksStale,
+    };
+  });
+}
+
+// The reconcile report: every active canvas with its evidence, candidates first.
+// Text mode ends with the workflow reminder (judge → receipt → close threads →
+// archive) so an agent landing here cold still does the right thing.
+async function sweep(args: string[] = []) {
+  const r = await api("canvas.ls", { method: "GET" });
+  let items = r.items as any[];
+  const projectFilter = flag(args, "project");
+  if (projectFilter !== undefined) items = items.filter((d) => (d.project || "") === projectFilter);
+  const git = gitContext();
+  const rows = sweepEvidence(items, gitLogEntries(git.root));
+  const shipped = rows.filter((x) => x.looksShipped);
+  const stale = rows.filter((x) => x.looksStale);
+  const active = rows.filter((x) => !x.looksShipped && !x.looksStale);
+  await track("sweep.run", { shipped: shipped.length, stale: stale.length, active: active.length, git: !!git.root });
+
+  if (has(args, "json")) {
+    console.log(JSON.stringify({ local: git, gitWindow: git.root ? SWEEP_LOG_WINDOW : null, idleDays: SWEEP_IDLE_DAYS, rows }, null, 2));
+    return;
+  }
+
+  console.log(`Sweep — ${git.root ? `git: ${git.repo} @ ${git.branch} (commit evidence from the last ${SWEEP_LOG_WINDOW.replace(".", " ")})` : "no git repo here — idle signals only; run from the repo for commit evidence"}`);
+  if (!rows.length) { console.log("\n✓ nothing to sweep — no active, unpinned canvases" + (projectFilter ? " in that project" : "")); return; }
+
+  const line = (x: SweepRow, evidence: string) => {
+    console.log(`  ${x.slug}  ${x.title}${x.project ? ` · ${x.project}` : ""}`);
+    console.log(`    ${evidence}`);
+  };
+  if (shipped.length) {
+    console.log(`\nLooks shipped (${shipped.length}) — commits reference the canvas after its last update:`);
+    for (const x of shipped) {
+      const recent = x.commits.filter((c) => c.ts > x.updatedAt).slice(0, 3);
+      line(x, `${recent.map((c) => `${c.sha} "${c.subject}"`).join(", ")}${x.commitsAfterUpdate > 3 ? ` +${x.commitsAfterUpdate - 3} more` : ""} · ${x.open ? `${x.open} open thread(s)` : "no open threads"} · idle ${x.idleDays}d`);
+    }
+  }
+  if (stale.length) {
+    console.log(`\nLooks stale (${stale.length}) — idle ${SWEEP_IDLE_DAYS}d+ with no open threads, no commit evidence:`);
+    for (const x of stale) line(x, `idle ${x.idleDays}d · 0 open — shipped elsewhere, superseded, or abandoned?`);
+  }
+  if (active.length) {
+    console.log(`\nStill active (${active.length}) — leave alone:`);
+    for (const x of active) console.log(`  ${x.slug}  ${x.title}${x.open ? ` · ${x.open} open` : ""} · ${relTime(x.updatedAt)}`);
+  }
+  console.log(`\nEvidence, not verdicts — read each candidate (and the code) before acting. For a truly`);
+  console.log(`shipped canvas: stamp a Shipped receipt (pull → append → push), reply + resolve its open`);
+  console.log(`threads with the landing commit, then \`drafty canvas archive <slug>\`. Propose the list`);
+  console.log(`to the human first unless you shipped the work yourself this session.`);
+}
+
 // One-shot orientation: who you are, where you are (git), the projects + tags
 // already in use, and the canvas list — everything needed to decide what to put
 // on the next push/update (which project, which tags, create vs. update). Run it
@@ -1256,6 +1358,14 @@ async function context(args: string[] = []) {
   const tags = [...tagCount.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
   const unfiled = items.filter((d) => !d.project || !(Array.isArray(d.tags) && d.tags.length)).length;
 
+  // The sweep nudge — the primary trigger for reconciling canvases with shipped
+  // code. Same evidence as `drafty sweep`, boiled down to one count, surfaced
+  // here because context opens every drafty session: the human never has to
+  // remember to ask. One extra git invocation; cheap.
+  const sweepRows = sweepEvidence(items, gitLogEntries(git.root));
+  const sweepShipped = sweepRows.filter((x) => x.looksShipped).length;
+  const sweepStale = sweepRows.filter((x) => x.looksStale).length;
+
   // The canvas list is capped to the most-recently-updated N (default 15) so it
   // stays readable as the account grows — the project/tag aggregates above stay
   // complete, so the full landscape is always visible. --limit 0 shows all.
@@ -1270,6 +1380,7 @@ async function context(args: string[] = []) {
       me: { email: me.email || null, isGuest: me.isGuest, canvases: me.canvases },
       local: git,
       projects, ungrouped, tags, archived, unfiled,
+      sweep: { looksShipped: sweepShipped, looksStale: sweepStale },
       shownCanvases: shown.length, moreCanvases: more,
       canvases: shown.map((d) => ({
         slug: d.slug, title: d.title, description: d.description || null, project: d.project || null,
@@ -1286,6 +1397,10 @@ async function context(args: string[] = []) {
   console.log(`Tags (${tags.length})${tags.length ? ":      " + tags.map((t) => `#${t.name} (${t.count})`).join(" · ") : ""}`);
   if (archived) console.log(`Archived:    ${archived} hidden (pass --archived to include)`);
   if (unfiled) console.log(`Unfiled:     ${unfiled} missing a project or tags — \`drafty canvas ls --unfiled\`, then \`drafty canvas set <slug> …\``);
+  if (sweepShipped + sweepStale > 0) {
+    const parts = [sweepShipped ? `${sweepShipped} look${sweepShipped === 1 ? "s" : ""} shipped` : null, sweepStale ? `${sweepStale} look${sweepStale === 1 ? "s" : ""} stale` : null].filter(Boolean).join(", ");
+    console.log(`Sweep:       ${parts} — \`drafty sweep\` for the evidence (judge before archiving)`);
+  }
 
   if (!items.length) { console.log(`\n(no canvases yet — publish one with \`drafty canvas push <file>\`)`); return; }
   console.log(`\nMost recent${more > 0 ? ` ${shown.length} of ${items.length}` : ""}:`);
@@ -1598,6 +1713,7 @@ COMMENTS — threads pinned to a canvas, and their replies
 
   drafty shot <slug|file.html|url> [--width N] [--revision R] [--annotation A] [--full] [-o out]   render to an image and print its path (the agent's eyes)
   drafty context [--limit N] [--archived] [--json]   one-shot orientation: identity, git, projects, tags + recent canvases
+  drafty sweep [--project P] [--json]         reconcile canvases with shipped code: which look shipped (slug in a commit) or stale
   drafty changelog [--json]                   what shipped, by week
   drafty login / logout                       sign in (browser; web + CLI) / sign out
   drafty whoami                               show your identity
@@ -1626,7 +1742,7 @@ const COMMENTS: Record<string, Cmd> = {
 };
 const MARKS: Record<string, Cmd> = { ls: marksLs, rm: marksRm };
 // Top-level: session / meta — not scoped to a canvas or a comment.
-const TOP: Record<string, Cmd> = { context, changelog, login, logout, whoami, setup, doctor, shot };
+const TOP: Record<string, Cmd> = { context, changelog, login, logout, whoami, setup, doctor, shot, sweep };
 
 function runGroup(name: string, table: Record<string, Cmd>, args: string[]) {
   const [verb, ...rest] = args;
