@@ -33,8 +33,8 @@ function clearIdentity(): void {
 const ANALYTICS_ID_FILE = join(STATE_DIR, "analytics-id");
 
 // Thin analytics: a stable per-install id (the agent is its own "user") and a
-// fire-and-forget POST to /api/track. No SDK, no API key (the ingest accepts
-// body identity). Best-effort — never let telemetry break or slow a command.
+// fire-and-forget POST to /api/track. No SDK. Best-effort — never let telemetry
+// break or slow a command.
 function analyticsId(): string {
   try {
     if (existsSync(ANALYTICS_ID_FILE)) return readFileSync(ANALYTICS_ID_FILE, "utf8").trim();
@@ -49,10 +49,8 @@ function analyticsId(): string {
 async function track(eventName: string, props: Record<string, unknown> = {}): Promise<void> {
   if (process.env.DRAFTY_NO_ANALYTICS) return;
   try {
-    // Tie CLI activity to the signed-in account (same id the web uses) so a real
-    // user's web + CLI events stitch into one funnel; fall back to the per-install
-    // id only when signed out. `surface` + `cli_version` let funnel queries split
-    // web vs cli and tell who's on the latest plugin.
+    // Attribute events to the signed-in account when there is one; fall back to
+    // the per-install id only when signed out.
     const idn = readIdentity();
     const userId = idn?.signedIn && idn.userId ? idn.userId : analyticsId();
     await fetch(`${BASE_URL}/api/track`, {
@@ -501,8 +499,8 @@ async function canvasPush(args: string[]) {
   const project = flag(args, "project");
   const tags = multiFlag(args, "tag");
   // --refresh marks this push as coming from a scheduled job (drafty-cron). The
-  // server stamps the canvas as self-refreshing; arming a new one is the free-plan
-  // gate (free includes 1), and re-pushes to an armed canvas always pass.
+  // server stamps the canvas as self-refreshing (arming a new one may be
+  // plan-gated server-side); re-pushes to an armed canvas always pass.
   const refresh = has(args, "refresh");
   // Divergence guard (agent-eyes S3): send the rev counter we last synced so the
   // server refuses to clobber a canvas that moved (browser edit, restore,
@@ -547,8 +545,7 @@ async function canvasPush(args: string[]) {
   // Server-sent aside (e.g. the first self-refreshing canvas on the free plan).
   // Relay it verbatim — it's written for the human, not the log.
   if (r.notice) console.log(`  ${r.notice}`);
-  // ?ref=cli attributes views of a freshly-published link back to the CLI publish
-  // (the start of the creator→commenter→creator loop).
+  // ?ref=cli marks the link as CLI-published.
   console.log(`  ${url(r.slug)}?ref=cli`);
 
   // Organize at publish time: any --project/--tag flags are applied in a single
@@ -574,7 +571,7 @@ async function canvasPush(args: string[]) {
     console.log(`  Claude waits for your go — run \`drafty canvas mode ${r.slug} live\` to work comments live`);
   }
   // First canvas ever → the server seeded a starter thread. Walk them through
-  // the one rep that is the product: see the comment, have Claude answer it.
+  // it: see the comment, have Claude answer it.
   if (r.welcomeSeeded) {
     console.log("");
     console.log("  ✦ your first canvas — a starter comment is waiting on it.");
@@ -2059,8 +2056,8 @@ async function canvasClaim(args: string[]) {
     );
   }
   const me = await api("whoami", { method: "GET" }); // my identity = the new owner
-  // Claiming is the conversion moment — pin the canvas to a real account, not a
-  // throwaway guest. If the stored identity is still a guest, sign in first.
+  // Claiming pins the canvas to a real account, not a throwaway guest. If the
+  // stored identity is still a guest, sign in first.
   if (me.isGuest) {
     console.error("Claiming keeps this canvas under your Drafty account — sign in first:");
     console.error(`  drafty login          opens your browser to sign in`);
@@ -2070,7 +2067,6 @@ async function canvasClaim(args: string[]) {
   await api("canvas.claim", { token: provisionToken, body: { slug, newCreatorId: me.userId } });
   const who = me.email ? ` (${me.email})` : "";
   console.error(`✓ claimed — ${url(slug)} is yours now${who}. It won't expire, and it's in \`drafty canvas ls\`.`);
-  // The demo→real conversion event — the activation funnel's bottom.
   await track("canvas.claimed", { slug });
 }
 
