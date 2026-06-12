@@ -8,12 +8,18 @@
 //
 //   bun scripts/release.ts 0.1.1
 import { $ } from "bun";
+import { join } from "path";
 
 const v = process.argv[2];
 if (!v || !/^\d+\.\d+\.\d+$/.test(v)) {
   console.error("usage: bun scripts/release.ts <semver>   e.g. 0.1.1");
   process.exit(1);
 }
+
+// Gate the release: a syntax-broken or crash-on-load CLI must never ship to
+// every installed user. preflight.ts parses + boots the binary and exits
+// non-zero on failure, which aborts here before any commit/tag/push.
+await $`bun ${join(import.meta.dir, "preflight.ts")}`;
 
 const manifest = "plugins/drafty/.claude-plugin/plugin.json";
 const j = JSON.parse(await Bun.file(manifest).text());
