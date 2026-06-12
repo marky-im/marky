@@ -1497,16 +1497,17 @@ async function canvasArchive(args: string[], archived: boolean) {
   else console.log(`✓ unarchived ${slug} — back in \`drafty canvas ls\``);
 }
 
-// Ship close-out — the whole "this canvas's work landed" sequence as one
-// command: stamp a Shipped receipt onto the body (markdown or HTML to match the
+// Close-out — the whole "this canvas's work landed" sequence as one command:
+// stamp a Shipped receipt onto the body (markdown or HTML to match the
 // canvas), reply + resolve every open thread with the landing commits, then
-// archive. Safe to re-run on a half-finished ship: a receipt that already names
-// every given commit isn't stamped twice, and resolved threads are skipped.
-async function canvasShip(args: string[]) {
+// archive — closing the canvas the way you'd close a tracking issue. Safe to
+// re-run on a half-finished close: a receipt that already names every given
+// commit isn't stamped twice, and resolved threads are skipped.
+async function canvasClose(args: string[]) {
   const slug = args[0];
   const commits = multiFlag(args, "commit");
   if (!slug || slug.startsWith("--") || !commits.length)
-    return die('usage: drafty canvas ship <slug> --commit <sha>[,<sha>…] [--note "<one line>"] [--repo <name>]');
+    return die('usage: drafty canvas close <slug> --commit <sha>[,<sha>…] [--note "<one line>"] [--repo <name>]');
 
   // Normalize against the cwd repo when possible: short shas in the receipt,
   // the repo name in parentheses, and the first commit's subject as the default
@@ -1566,7 +1567,7 @@ async function canvasShip(args: string[]) {
   await api("canvas.set", { body: { slug, archived: true } });
   console.log(`✓ archived ${slug} — off your list; link + history kept`);
   console.log(`  ${url(slug)}`);
-  await track("canvas.shipped", { slug, commits: shas.length, threads_closed: open.length, receipt: stamped ? "existing" : "stamped" });
+  await track("canvas.closed", { slug, commits: shas.length, threads_closed: open.length, receipt: stamped ? "existing" : "stamped" });
 }
 
 // Pin/unpin: a stick flag. Pinned canvases hold the "Pinned" lane on drafty.im/home
@@ -2431,7 +2432,7 @@ CANVAS — the canvas you publish
   drafty canvas set <slug> [--project P|--no-project] [--tag T…] [--untag T…] [--clear-tags]   organize
   drafty canvas tag <slug> <label…> / untag <slug> <label…>   add/remove kind labels
   drafty canvas archive <slug> / unarchive <slug>   hide from / restore to \`canvas ls\`
-  drafty canvas ship <slug> --commit <sha>[,…] [--note "…"]   close out shipped work: stamp receipt, resolve threads, archive
+  drafty canvas close <slug> --commit <sha>[,…] [--note "…"]   close out shipped work: stamp receipt, resolve threads, archive
   drafty canvas pin <slug> / unpin <slug>   hold in / release from the Pinned lane on your home
   drafty canvas mode <slug> <readonly|feedback|live>   how it behaves when shared
   drafty canvas visibility <slug> <public|authed|invite|private>   who can view it (invite/private = owner + invited only)
@@ -2475,7 +2476,7 @@ const CANVAS: Record<string, Cmd> = {
   push: canvasPush, ls: canvasLs, show: canvasShow, pull: canvasPull,
   versions: canvasVersions, restore: canvasRestore, revert: canvasRevert, status: canvasStatus, rename: canvasRename,
   set: canvasSet, tag: (a) => canvasTag(a, true), untag: (a) => canvasTag(a, false),
-  archive: (a) => canvasArchive(a, true), unarchive: (a) => canvasArchive(a, false), ship: canvasShip,
+  archive: (a) => canvasArchive(a, true), unarchive: (a) => canvasArchive(a, false), close: canvasClose,
   pin: (a) => canvasPin(a, true), unpin: (a) => canvasPin(a, false),
   mode: canvasMode, visibility: canvasVisibility, rm: canvasRm, claim: canvasClaim,
 };
