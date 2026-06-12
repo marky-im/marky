@@ -242,31 +242,27 @@ description / commit message** — that's what makes later sweeps deterministic.
 
 ### File it as you publish — don't wait to be asked
 
-**File every canvas as you publish it.** A title, a project, and a kind tag cost nothing and keep
-the human's list readable. Do this on your own; only ask if you genuinely can't infer the project.
-
-Set it in the same `push` — no follow-up commands:
+**A new canvas auto-files its project from the cwd repo** (`~/Projects/journeys` → `journeys`;
+push prints what it did). Override with `--project "<name>"` when the initiative isn't the repo;
+`--no-project` keeps a one-off loose. What's still yours to set, in the same `push`:
 
 ```
-drafty canvas push plan.md --title "Tokyo itinerary v2" --project journeys --tag plan
+drafty canvas push plan.md --title "Tokyo itinerary v2" --tag plan
 ```
 
 - **Title** — always give a real, human one (`--title`). Don't ship "Untitled canvas" or a
   filename. Push infers from the canvas's first `# heading` if you omit it; prefer setting it.
-- **Project = the initiative you're working in.** Infer it from context — the repo/working
-  directory (`~/Projects/journeys` → `journeys`), or the thing the human is building. One per
-  canvas.
 - **Tags = what the canvas is.** Read the content and label it: a plan/spec → `plan`, findings →
   `research`, a QA/test write-up → `testing-report`, a design → `design`. One or two is plenty
   — don't over-tag.
 
 **Orient first with `drafty context`.** Before a push/update, run `drafty context` (or
-`--json`) once — it returns, in a single call: your identity, the **local git repo + branch**
-(to infer the project), the **projects and tags already in use** (with counts), and the
-**most-recent canvases** (slug · title · tags · open · updated). Use it to pick the right project,
-reuse an existing tag, and decide **create vs. update** (match an existing slug to update;
-otherwise a push creates). The canvas list is capped to the latest ~15 — pass `--limit 0` or drill
-in with `drafty canvas ls --project <name>` when you need more.
+`--json`) once — it returns, in a single call: your identity, the **local git repo + branch**,
+the **projects and tags already in use** (with counts), and the **most-recent canvases**
+(slug · title · tags · open · updated). Use it to reuse an existing tag, override the project
+when the repo isn't the initiative, and decide **create vs. update** (match an existing slug to
+update; otherwise a push creates). The canvas list is capped to the latest ~15 — pass `--limit 0`
+or drill in with `drafty canvas ls --project <name>` when you need more.
 
 **Reuse existing labels — don't fork them.** Match the human's existing spelling from
 `drafty context` (`journeys`, not a new `journeys-im`) so groups don't splinter.
@@ -372,18 +368,9 @@ fraction `(0..1)` inside the element — on top of `anchorTag: "img"` and
 `anchorText` (the image's alt). `list`/`inbox`/`watch` include these; the human
 label shows a region, e.g. `<img> "dashboard" @ top-right (78%,22%)`.
 
-To know *where* a comment points — and to actually **see** it:
-1. `drafty canvas pull <slug>` to get the content; find the `<img>` and its `src`.
-2. Read the image — Read needs a local file path, so first get the `src` onto
-   disk: a `data:` URI → decode its base64 to a temp file (`.png`/`.jpg`/`.svg`
-   by mime); a URL → fetch it down. Then Read it (Claude Code views images). The
-   comment points at `(fx·width, fy·height)`; the region label already tells you
-   the quadrant.
-3. For pixel-precise sight, drop a marker on a copy and Read that: a tiny HTML
-   `<div style="position:relative;display:inline-block"><img src="…"><div
-   style="position:absolute;left:calc(FX*100% - 13px);top:calc(FY*100% - 13px);
-   width:26px;height:26px;border-radius:50%;background:#e0119d;border:3px solid
-   #fff"></div></div>`, screenshot it (any headless browser), Read the PNG.
+To **see** where it points: `drafty shot <slug> --annotation <annId>` — the render
+highlights the anchored element *and* draws a pink dot at the exact `(fx,fy)`
+spot. Read the image it prints.
 
 Always Read the **full** image (with the marker) — the surrounding context is
 usually what tells you *why* the comment is right (the value it should match, the
@@ -402,19 +389,18 @@ alone**. The anchored element tells you where they clicked, not what they saw.
 The loop:
 
 1. Read the thread's reproduction context from `drafty comments ls/inbox --json`:
-   `viewportW` (their layout width — the load-bearing number), `anchorRect`,
-   `canvasRevisionId` (the version they were looking at).
+   `viewportW` (their layout width — the load-bearing number), `anchorRect`, and
+   `stale` (true = the feedback predates the current version — say so in your
+   reply instead of "fixing" something that may already have moved; the
+   non-JSON output prints a ⚠ stale marker on those threads).
 2. **See it:** `drafty shot <slug> --annotation <annId>` renders the commenter's
    exact view — their width, their revision, the anchored element highlighted —
    and prints an image path. Read it.
-3. **Staleness check:** if `canvasRevisionId` isn't the current head, the
-   feedback predates the current version — say so in your reply instead of
-   "fixing" something that may already have moved.
-4. Make the fix in the source file.
-5. **Verify before claiming:** `drafty shot <file.html> --width <their width>`
+3. Make the fix in the source file.
+4. **Verify before claiming:** `drafty shot <file.html> --width <their width>`
    on the local file (or re-shot the canvas after pushing). Never claim a visual
    fix you haven't re-rendered.
-6. Push, reply, resolve.
+5. Push, reply, resolve.
 
 **The anchor is a hint, not necessarily the culprit.** Reviewers click the
 nearest element; the root cause is often a sibling/ancestor/container. If the

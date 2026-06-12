@@ -558,20 +558,22 @@ async function canvasPush(args: string[]) {
   // Organize at publish time: any --project/--tag flags are applied in a single
   // setmeta call, so the agent files a canvas under its initiative + kind as it
   // ships, instead of leaving it loose. Tags are additive (re-pushing keeps
-  // existing ones); project overwrites.
-  if (project !== undefined || tags.length) {
+  // existing ones); project overwrites. A fresh canvas with no --project is
+  // auto-filed under the cwd repo (the usual initiative) — explicit --project
+  // wins, --no-project keeps it loose, updates are never re-filed.
+  const autoProject = r.created && project === undefined && !has(args, "no-project") ? gitContext().repo ?? undefined : undefined;
+  const effProject = project !== undefined ? project : autoProject;
+  if (effProject !== undefined || tags.length) {
     const meta: Record<string, unknown> = { slug: r.slug };
-    if (project !== undefined) meta.project = project;
+    if (effProject !== undefined) meta.project = effProject;
     if (tags.length) meta.addTags = tags;
     const summary = fmtMeta(await api("canvas.set", { body: meta }));
-    if (summary) console.log(`  ${summary}`);
+    if (summary) console.log(`  ${summary}${autoProject !== undefined ? "  (project from git — --no-project to skip)" : ""}`);
   }
 
-  // Born unfiled — one line with the likely project (the cwd repo) so the
-  // agent files it now instead of leaving it for a later tidy pass.
-  if (r.created && project === undefined && !tags.length) {
-    const repo = gitContext().repo;
-    console.log(`  unfiled — file it: drafty canvas set ${r.slug} --project ${repo ?? "<name>"} --tag <kind>`);
+  // Tags stay the agent's call — one line so a fresh canvas isn't left kindless.
+  if (r.created && !tags.length) {
+    console.log(`  no kind tag yet — drafty canvas tag ${r.slug} <plan|research|design|…>`);
   }
 
   if (r.created && r.mode === "feedback") {
@@ -602,7 +604,7 @@ async function commentsLs(args: string[]) {
   console.log(`# ${r.title} — ${url(slug)}`);
   console.log(`${anns.length} thread(s)\n`);
   for (const a of anns) {
-    console.log(`[${a.status === "completed" ? "✓ done" : "● open"}] ${anchorLabel(a)}`);
+    console.log(`[${a.status === "completed" ? "✓ done" : "● open"}] ${anchorLabel(a)}${a.stale === true ? "  ⚠ stale — feedback predates the current version" : ""}`);
     console.log(`  ann: ${a.id}`);
     if (a.viewportW) console.log(`  view: ${a.viewportW}px${a.canvasRevisionId ? ` @ rev ${String(a.canvasRevisionId).slice(0, 8)}` : ""} — see it: drafty shot ${slug} --annotation ${a.id}`);
     for (const c of a.comments) console.log(`  · ${c.authorName} (${c.authorKind}): ${c.body}`);
@@ -1634,7 +1636,7 @@ async function commentsInbox(args: string[]) {
   }
   if (!items.length) console.log("no fresh comments to work on");
   for (const it of items) {
-    console.log(`• ${it.slug} — ${anchorLabel(it)}`);
+    console.log(`• ${it.slug} — ${anchorLabel(it)}${it.stale === true ? "  ⚠ stale — feedback predates the current version" : ""}`);
     console.log(`  ${it.lastAuthor}: ${it.lastComment}`);
     if (it.viewportW) console.log(`  view: ${it.viewportW}px — see it: drafty shot ${it.slug} --annotation ${it.annotationId}`);
     console.log(`  ann: ${it.annotationId}\n`);
@@ -2418,7 +2420,7 @@ async function changelog(args: string[]) {
 const HELP = `drafty — publish canvases for annotation, read & reply to the comments
 
 CANVAS — the canvas you publish
-  drafty canvas push <file> [--title T] [--slug S] [--mode M] [--visibility public|authed|invite] [--private] [--project P] [--tag T …]   publish/update + file it
+  drafty canvas push <file> [--title T] [--slug S] [--mode M] [--visibility public|authed|invite] [--private] [--project P|--no-project] [--tag T …]   publish/update + file it (new canvases auto-file under the cwd repo)
   drafty canvas ls [--project P] [--tag T] [--unfiled] [--archived|--all] [--json]   list your canvases (--archived = just the shelf)
   drafty canvas show <slug>                meta: title, link, project, tags, mode, threads
   drafty canvas pull <slug> [--revision id] [-o f]   download the content
