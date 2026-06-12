@@ -317,11 +317,9 @@ on the list, and not silently hidden either.
    implemented? Classify: **shipped** / **partial** / **leave alone**.
 3. **Propose before acting** — show the human the verdict list (a wrong archive silently parks
    the comment loop). Skip the confirmation only at a ship moment (trigger 2).
-4. For each **shipped** canvas, run (from the shipping repo)
-   `drafty canvas close <slug> --commit <sha>[,…] [--note "…"]` — it stamps the Shipped receipt
-   (the archived canvas becomes its own record: spec on top, receipt at the bottom), replies +
-   resolves every open thread with the landing commits (people who left feedback get closure,
-   not silence), and archives.
+4. For each **shipped** canvas, run the `drafty canvas close` line tidy printed under it (the
+   evidence shas are already baked in; add `--note` if the commit subject doesn't tell the story)
+   — receipt stamped, open threads replied + resolved with the landing commits, archived.
 5. For each **partial** canvas: don't archive. Leave a status comment on the canvas instead —
    what landed (with commits), what's still open — so the canvas tracks its own progress and the
    next sweep picks up where this one left off.

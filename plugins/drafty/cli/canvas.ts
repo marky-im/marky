@@ -2030,6 +2030,7 @@ async function tidy(args: string[] = []) {
     for (const x of shipped) {
       const recent = x.commits.filter((c) => c.ts > x.updatedAt).slice(0, 3);
       evidenceLine(x, `${recent.map((c) => `${c.sha} "${c.subject}"`).join(", ")}${x.commitsAfterUpdate > 3 ? ` +${x.commitsAfterUpdate - 3} more` : ""} · ${x.open ? `${x.open} open thread(s)` : "no open threads"} · idle ${x.idleDays}d`);
+      console.log(`    if truly shipped: drafty canvas close ${x.slug} --commit ${recent.map((c) => c.sha).join(",")}`);
     }
   }
   if (stale.length) {
@@ -2045,9 +2046,8 @@ async function tidy(args: string[] = []) {
   console.log(`suffice; \`drafty canvas pull <slug>\` if not) and reuse the existing project/tag vocabulary`);
   console.log(`(\`drafty context\`). Junk deletions: propose to the human — never rm unasked.`);
   if (shipped.length || stale.length) {
-    console.log(`For a truly shipped canvas: stamp a Shipped receipt (pull → append → push), reply + resolve`);
-    console.log(`its open threads with the landing commit, then \`drafty canvas archive <slug>\`. Propose the`);
-    console.log(`list to the human first unless you shipped the work yourself this session.`);
+    console.log(`For a truly shipped canvas, run its \`canvas close\` line above (receipt + threads + archive).`);
+    console.log(`Propose the list to the human first unless you shipped the work yourself this session.`);
   }
 }
 
