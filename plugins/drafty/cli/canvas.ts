@@ -885,7 +885,7 @@ class CdpBrowser {
   // Render one page in its own tab: emulate the exact viewport, navigate, wait
   // for the load event OR the settle cap (whichever first — pages holding live
   // sockets never "finish"), give paint one beat, freeze animations, shoot.
-  async shot(url: string, opts: { width: number; height: number; out: string; full?: boolean; format?: "png" | "webp" | "jpeg" }): Promise<void> {
+  async shot(url: string, opts: { width: number; height: number; out: string; full?: boolean; format?: "png" | "webp" | "jpeg"; anchor?: { tag?: string; text?: string; fx: number; fy: number } }): Promise<void> {
     const { targetId } = await this.send("Target.createTarget", { url: "about:blank" });
     const { sessionId } = await this.send("Target.attachToTarget", { targetId, flatten: true });
     try {
@@ -919,19 +919,59 @@ class CdpBrowser {
       await Promise.race([Promise.all([loadP, idleP]), new Promise((r) => setTimeout(r, 12_000))]);
       await new Promise((r) => setTimeout(r, 400));
       if (!process.env.DRAFTY_NO_FREEZE) await this.send("Runtime.evaluate", { expression: FREEZE_JS }, sessionId).catch(() => { /* about:blank etc. */ });
-      let clip: Record<string, number> | undefined;
-      if (opts.full) {
-        // Full-page captures never scroll, so loading="lazy" images below the
-        // fold would ship as blanks — force them eager and let them land.
+      // Capturing below the fold (a full page, or an anchor crop that may sit
+      // below it) needs lazy images forced eager or they ship as blanks.
+      if (opts.full || opts.anchor) {
         await this.send(
           "Runtime.evaluate",
           { expression: "document.querySelectorAll('img[loading=lazy]').forEach(i => { i.loading = 'eager'; })" },
           sessionId,
         ).catch(() => { /* no DOM */ });
         await new Promise((r) => setTimeout(r, 1_200));
+      }
+      let clip: Record<string, number> | undefined;
+      if (opts.full) {
         const m = await this.send("Page.getLayoutMetrics", {}, sessionId);
         const contentH = Math.ceil(m.cssContentSize?.height ?? m.contentSize?.height ?? opts.height);
         clip = { x: 0, y: 0, width: opts.width, height: Math.min(20_000, Math.max(opts.height, contentH)), scale: 1 };
+      }
+      // Anchor crop: find the commented element, drop a marker at the exact
+      // (fx,fy) point the user pinned, then tighten the clip to that
+      // neighbourhood — so the agent sees precisely what the comment points at,
+      // not the whole page. Falls back to the full render if it can't locate it.
+      if (opts.anchor) {
+        const a = opts.anchor;
+        const expr =
+          "(() => {" +
+          "  const tag = " + JSON.stringify((a.tag || "").toLowerCase()) + ";" +
+          "  const text = " + JSON.stringify((a.text || "").replace(/\s+/g, " ").trim()) + ";" +
+          "  const norm = s => (s || '').replace(/\\s+/g, ' ').trim();" +
+          "  const cand = Array.from(document.querySelectorAll(tag || '*'));" +
+          "  let el = cand.find(e => norm(e.getAttribute('alt')) === text || norm(e.textContent) === text);" +
+          "  if (!el && text) el = cand.find(e => norm(e.getAttribute('alt')).includes(text) || norm(e.textContent).includes(text));" +
+          "  if (!el) return null;" +
+          "  const r = el.getBoundingClientRect();" +
+          "  const left = r.left + window.scrollX, top = r.top + window.scrollY;" +
+          "  const px = left + " + a.fx + " * r.width, py = top + " + a.fy + " * r.height;" +
+          "  const m = document.createElement('div');" +
+          "  m.style.cssText = 'position:absolute;left:'+(px-16)+'px;top:'+(py-16)+'px;width:32px;height:32px;border:3px solid #ff2d55;border-radius:9999px;box-shadow:0 0 0 3px rgba(255,255,255,.95),0 0 20px 5px rgba(255,45,85,.6);z-index:2147483647;pointer-events:none';" +
+          "  document.documentElement.appendChild(m);" +
+          "  return { px, py, left, top, w: r.width, h: r.height };" +
+          "})()";
+        const res = await this.send("Runtime.evaluate", { expression: expr, returnByValue: true }, sessionId).catch(() => null);
+        const v = res?.result?.value;
+        if (v && typeof v.px === "number") {
+          const cropW = Math.min(opts.width, Math.max(420, Math.round(v.w + 80)));
+          const cropH = Math.min(1000, Math.max(380, Math.round(v.h + 200)));
+          const cx = v.left + v.w / 2;
+          clip = {
+            x: Math.max(0, Math.round(cx - cropW / 2)),
+            y: Math.max(0, Math.round(v.py - cropH / 2)),
+            width: cropW,
+            height: cropH,
+            scale: 1,
+          };
+        }
       }
       // Stability gate: the only honest "has it painted?" signal is the pixels.
       // Recapture until two consecutive frames match byte-for-length and aren't
@@ -981,7 +1021,7 @@ function cdpBrowser(): Promise<CdpBrowser> {
   return cdpLaunching;
 }
 
-async function localShot(target: string, opts: { width: number; height: number; out: string; full?: boolean; format?: "png" | "webp" | "jpeg" }): Promise<void> {
+async function localShot(target: string, opts: { width: number; height: number; out: string; full?: boolean; format?: "png" | "webp" | "jpeg"; anchor?: { tag?: string; text?: string; fx: number; fy: number } }): Promise<void> {
   const url = existsSync(target) ? "file://" + resolve(target) : target;
   const browser = await cdpBrowser();
   await browser.shot(url, opts);
@@ -1031,13 +1071,24 @@ async function shot(args: string[]) {
     console.error(`  ${slug} is ${r.visibility} — rendering locally from pulled content`);
     let annRevision = revisionId;
     let width = widthFlag ? Number(widthFlag) : 390;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let ann: any;
     if (annotationId) {
       const ls = await api("comments.ls", { method: "GET", query: { slug } });
-      const ann = (ls.annotations as any[]).find((a) => a.id === annotationId);
+      ann = (ls.annotations as any[]).find((a) => a.id === annotationId);
       if (ann?.viewportW) width = Math.round(ann.viewportW);
       if (!annRevision && ann?.canvasRevisionId) annRevision = ann.canvasRevisionId;
-      console.error("  note: the local fallback renders the page without the anchor highlight");
     }
+    const anchor =
+      ann && typeof ann.anchorFx === "number" && typeof ann.anchorFy === "number"
+        ? { tag: ann.anchorTag as string | undefined, text: ann.anchorText as string | undefined, fx: ann.anchorFx as number, fy: ann.anchorFy as number }
+        : undefined;
+    if (annotationId)
+      console.error(
+        anchor
+          ? `  marking the pin at ${Math.round(anchor.fx * 100)}%,${Math.round(anchor.fy * 100)}% of "${anchor.text ?? anchor.tag}" and cropping to it`
+          : "  note: this annotation has no point anchor to mark — rendering the full page",
+      );
     const pulled = await api("canvas.pull", { method: "GET", query: { slug, ...(annRevision ? { revisionId: annRevision } : {}) } });
     if (pulled.format === "markdown")
       console.error("  note: markdown renders approximately here (plain text, not the canvas styling)");
@@ -1047,8 +1098,8 @@ async function shot(args: string[]) {
         : pulled.content;
     const tmpHtml = join(tmpdir(), `drafty-shot-pull-${process.pid}.html`);
     writeFileSync(tmpHtml, body);
-    out = out ?? join(tmpdir(), `drafty-shot-${slug}-${width}.png`);
-    await localShot(tmpHtml, { width, height: heightFlag ? Number(heightFlag) : 844, out, full });
+    out = out ?? join(tmpdir(), `drafty-shot-${slug}-${width}${annotationId ? `-${String(annotationId).slice(0, 8)}` : ""}.png`);
+    await localShot(tmpHtml, { width, height: heightFlag ? Number(heightFlag) : 844, out, full, anchor });
     rmSync(tmpHtml, { force: true });
     console.log(out);
     return;
